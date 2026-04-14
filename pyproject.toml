@@ -50,4 +50,4 @@ include = ["registers*"]
 exclude = ["*.tests*", "*.tests.*"]
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = {"" = "src"}  # Container for package modules
