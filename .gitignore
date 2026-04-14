@@ -36,6 +36,3 @@ htmlcov/
 *.db
 *.log
 *.zip
-test.py
-command.py
-ecommerce-backend-example/

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "decorators"
-version = "0.3.0"
+version = "2.0.0"
 description = "Decorator-driven persistence registry for Pydantic models and CLI tooling"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10"
@@ -33,6 +33,10 @@ dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/nexustech101/decorators"
+Repository = "https://github.com/nexustech101/decorators"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
