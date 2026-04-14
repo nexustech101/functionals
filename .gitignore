@@ -36,5 +36,6 @@ htmlcov/
 *.db
 *.log
 *.zip
+*.txt
 history.txt
 NEW_SPECS.md
