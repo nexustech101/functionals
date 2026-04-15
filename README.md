@@ -22,27 +22,15 @@ pip install decorates
 ### CLI in 60 seconds
 
 ```python
-from decorates.cli import CommandRegistry
+import decorates.cli as cli
 
-cli = CommandRegistry()
 
-# ── built-in help alias ────────────────────────────────────────────────────
-
-@cli.register(
-    options=["-g", "--greet"],
-    name="greet",
-    description="Greet someone",
-)
+@cli.register(description="Greet someone")
+@cli.argument("name", type=str, help="Name to greet")
+@cli.option("--greet")
+@cli.option("-g")
 def greet(name: str) -> str:
     return f"Hello, {name}!"
-
-@cli.register(
-    options=["-h", "--help"],
-    name="help",
-    description="List all registered commands",
-)
-def list_clis() -> None:
-    cli.list_clis()
 
 
 if __name__ == "__main__":
@@ -52,19 +40,7 @@ if __name__ == "__main__":
 ```bash
 python app.py greet Alice
 python app.py --greet Alice
-python app.py g Alice
-
-python app.py help
-python app.py --help
-python app.py h
-```
-
-```bash
-Hello, Alice!
-
-Available commands:
-  greet [-g, --greet]: Greet someone
-  help [-h, --help]: List all registered commands
+python app.py -g Alice
 ```
 
 ### Database + FastAPI in 5 minutes
@@ -186,11 +162,11 @@ def list_orders_asc(limit: int = 20, offset: int = 0):  # Filter by newest  (n..
 
 ### `decorates.cli`
 
-- Register functions as commands with `@cli.register(...)`.
-- Type annotations drive argument parsing.
-- Optional command aliases with `options=["-x", "--long"]`.
-- Optional DI (`DIContainer`) and middleware (`MiddlewareChain`).
-- `CommandRegistry.run()` preserves decorates exceptions and wraps unexpected handler crashes as `CommandExecutionError` (with original exception chaining).
+- Register functions with module-level decorators: `@register`, `@argument`, `@option`.
+- Run command handlers through the module registry via `decorates.cli.run()`.
+- Support positional + named argument forms (for non-bool args), with bool flags as `--flag`.
+- Command aliases are declared with `@option("-x")` / `@option("--long")`.
+- Runtime wraps unexpected handler crashes as `CommandExecutionError` (with original exception chaining).
 - Operational logs use standard Python logging namespaces under `decorates.cli.*`.
 
 ### `decorates.db`
@@ -250,3 +226,4 @@ If your model contains a field named `password`, password values are automatical
 ## License
 
 MIT
+

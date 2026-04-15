@@ -1,157 +1,182 @@
 """
-The CommandRegistry stores command metadata and provides the @register
-decorates. It is intentionally decoupled from argparse and dispatching —
-it only knows about *what* commands exist, not *how* to invoke them.
+Internal command registry for the module-level CLI decorators.
 
-Usage::
-
-    registry = CommandRegistry()
-
-    @registry.register("greet", help_text="Greet someone")
-    def greet(name: str) -> str:
-        return f"Hello, {name}!"
+The public DX entrypoints live in ``decorates.cli.decorators``. This module
+stores command specs and executes commands from those specs.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from difflib import get_close_matches
+import inspect
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Sequence
+import sys
+from typing import Any, Callable, Sequence
 
-from decorates.cli.exceptions import (
-    CommandExecutionError,
-    DuplicateCommandError,
-    FrameworkError,
-    UnknownCommandError,
-)
-
-if TYPE_CHECKING:
-    from decorates.cli.middleware import MiddlewareChain
-    from decorates.cli.container import DIContainer
+from decorates.cli.exceptions import CommandExecutionError, DuplicateCommandError, FrameworkError, UnknownCommandError
+from decorates.cli.utils.reflection import get_params
+from decorates.cli.utils.typing import is_bool_flag, is_optional
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+class _MissingType:
+    def __repr__(self) -> str:
+        return "MISSING"
+
+
+MISSING = _MissingType()
+
+
+@dataclass(frozen=True)
+class ArgumentEntry:
+    """Typed metadata for one command argument."""
+
+    name: str
+    type: Any = str
+    help_text: str = ""
+    required: bool = True
+    default: Any = MISSING
+
+
+@dataclass(frozen=True)
 class CommandEntry:
-    """All metadata the decorates needs for a single command."""
+    """All metadata needed to parse and execute a command."""
+
     name: str
     handler: Callable[..., Any]
     help_text: str = ""
     description: str = ""
     options: tuple[str, ...] = field(default_factory=tuple)
+    arguments: tuple[ArgumentEntry, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class _StagedArgument:
+    name: str
+    arg_type: Any = str
+    help_text: str = ""
+    default: Any = MISSING
+
+
+@dataclass(frozen=True)
+class _StagedOption:
+    flag: str
+    help_text: str = ""
 
 
 class CommandRegistry:
-    """
-    Maps command names to their handlers and metadata.
-
-    Registries can be merged to support modular / plugin-based apps.
-    """
+    """Internal state container for staged decorators and finalized commands."""
 
     def __init__(self) -> None:
         self._commands: dict[str, CommandEntry] = {}
-        self._aliases: dict[str, str] = {}  # NEW
+        self._aliases: dict[str, str] = {}
+        self._pending_args: dict[Callable[..., Any], list[_StagedArgument]] = {}
+        self._pending_options: dict[Callable[..., Any], list[_StagedOption]] = {}
 
     # ------------------------------------------------------------------
-    # Registration
+    # Decorator staging + finalization
     # ------------------------------------------------------------------
 
-    def register(
+    def stage_argument(
         self,
-        name: str | None = None,
+        fn: Callable[..., Any],
+        name: str,
+        *,
+        arg_type: Any = str,
+        help_text: str = "",
+        default: Any = MISSING,
+    ) -> None:
+        if not name:
+            raise ValueError("argument() requires a non-empty argument name.")
+
+        staged = self._pending_args.setdefault(fn, [])
+        if any(item.name == name for item in staged):
+            raise ValueError(f"Argument '{name}' was declared more than once for '{fn.__name__}'.")
+
+        # Decorators execute bottom-up; prepend to preserve top-down source order.
+        staged.insert(0, _StagedArgument(name=name, arg_type=arg_type, help_text=help_text, default=default))
+
+    def stage_option(
+        self,
+        fn: Callable[..., Any],
+        flag: str,
         *,
         help_text: str = "",
+    ) -> None:
+        if not flag or not flag.startswith("-"):
+            raise ValueError("option() expects a CLI flag such as '-a' or '--add'.")
+
+        staged = self._pending_options.setdefault(fn, [])
+        if any(item.flag == flag for item in staged):
+            raise ValueError(f"Option '{flag}' was declared more than once for '{fn.__name__}'.")
+
+        # Decorators execute bottom-up; prepend to preserve top-down source order.
+        staged.insert(0, _StagedOption(flag=flag, help_text=help_text))
+
+    def finalize_command(
+        self,
+        fn: Callable[..., Any],
+        *,
+        name: str | None = None,
         description: str = "",
-        options: Sequence[str] | None = None,
-    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        """
-        Decorators that decorates a callable as a CLI command.
+        help_text: str = "",
+    ) -> None:
+        staged_args = self._pending_args.pop(fn, [])
+        staged_options = self._pending_options.pop(fn, [])
 
-        Args:
-            name:      The subcommand name used on the CLI.
-            help_text: Short description shown in --help output.
-            description: Longer description for docs / help output.
-            options: Optional command aliases such as ``["-g", "--greet"]``.
-
-        Raises:
-            DuplicateCommandError: If *name* is already registered.
-        """
-        if name is None:
-            raise TypeError("register() missing required argument: 'name'")
+        options = tuple(item.flag for item in staged_options)
+        command_name = (name or "").strip() or self._derive_command_name(options, fn.__name__)
+        if not command_name:
+            raise ValueError("register() could not determine a command name.")
 
         summary = description or help_text
-        normalized_options = tuple(options or ())
+        arguments = tuple(self._build_arguments(fn, staged_args))
 
-        def decorates(fn: Callable[..., Any]) -> Callable[..., Any]:
-            # Check command name collision
-            if name in self._commands or name in self._aliases:
-                logger.warning("Attempted duplicate command registration name='%s'.", name)
-                raise DuplicateCommandError(name)
+        self._assert_command_slot_available(command_name)
+        self._assert_options_available(command_name, options)
 
-            # Check alias collisions
-            for option in normalized_options:
-                normalized = option.lstrip("-")
+        entry = CommandEntry(
+            name=command_name,
+            handler=fn,
+            help_text=summary,
+            description=description,
+            options=options,
+            arguments=arguments,
+        )
 
-                if normalized in self._commands or normalized in self._aliases:
-                    logger.warning(
-                        "Attempted duplicate command alias registration option='%s' normalized='%s'.",
-                        option,
-                        normalized,
-                    )
-                    raise DuplicateCommandError(option)
-
-                self._aliases[normalized] = name
-
-            self._commands[name] = CommandEntry(
-                name=name,
-                handler=fn,
-                help_text=summary,
-                description=description,
-                options=normalized_options,
-            )
-            return fn
-
-        return decorates
+        self._commands[command_name] = entry
+        for flag in options:
+            normalized = self._normalize_alias(flag)
+            if normalized:
+                self._aliases[normalized] = command_name
 
     # ------------------------------------------------------------------
-    # Lookup
+    # Lookup + runtime
     # ------------------------------------------------------------------
 
     def get(self, name: str) -> CommandEntry:
-        """
-        Return the entry for *name*.
-
-        Raises:
-            UnknownCommandError: If *name* has not been registered.
-        """
         if name in self._commands:
             return self._commands[name]
 
-        normalized = name.lstrip("-")
+        normalized = self._normalize_alias(name)
         if normalized in self._aliases:
             return self._commands[self._aliases[normalized]]
 
         raise UnknownCommandError(name)
 
     def all(self) -> dict[str, CommandEntry]:
-        """Return a shallow copy of the command map."""
         return dict(self._commands)
 
     def has(self, name: str) -> bool:
-        """Return True if *name* is registered."""
-        if name in self._commands:
+        try:
+            self.get(name)
             return True
+        except UnknownCommandError:
+            return False
 
-        normalized = name.lstrip("-")
-        if normalized in self._aliases:
-            return True
-
-        return False
-
-    def list_clis(self) -> None:
-        """Print the registered commands and any configured aliases."""
+    def list_commands(self) -> None:
         if not self._commands:
             print("No commands registered.")
             return
@@ -162,106 +187,193 @@ class CommandRegistry:
             summary = entry.help_text or entry.description or "(no description)"
             print(f"  {entry.name}{aliases}: {summary}")
 
-    def list_commands(self) -> None:
-        """Backward-compatible alias for :meth:`list_clis`."""
-        self.list_clis()
-
     def run(
         self,
         argv: Sequence[str] | None = None,
         *,
-        container: "DIContainer | None" = None,
-        middleware: "MiddlewareChain | None" = None,
         print_result: bool = True,
     ) -> Any:
-        """
-        Parse CLI arguments and dispatch the matching command.
+        from decorates.cli.parser import ParseError, parse_command_args, render_command_usage
 
-        This is a convenience wrapper around ``build_parser`` and
-        ``Dispatcher`` for small scripts that don't need a custom
-        bootstrap module.
-        """
-        import sys
-
-        from decorates.cli.dispatcher import Dispatcher
-        from decorates.cli.parser import build_parser
-        from decorates.cli.container import DIContainer
-
-        parser = build_parser(self, container)
-        raw_argv = list(sys.argv[1:] if argv is None else argv)
-        logger.debug("CommandRegistry.run invoked with argv=%s", raw_argv)
-        normalized = self._normalize_argv(raw_argv)
-        try:
-            args = parser.parse_args(normalized)
-        except SystemExit:
-            if normalized:
-                cmd = normalized[0]
-                matches = get_close_matches(cmd, self._commands.keys())
-                if matches:
-                    print(f"Did you mean '{matches[0]}'?")
-                    logger.info("Parser rejected command '%s'; suggested '%s'.", cmd, matches[0])
-                else:
-                    logger.info("Parser rejected argv=%s with no close command match.", normalized)
-            raise
-
-        if not args.command:
-            logger.info("No command provided; printing parser help.")
-            parser.print_help()
+        raw = list(sys.argv[1:] if argv is None else argv)
+        if not raw:
+            self.list_commands()
             raise SystemExit(1)
 
-        cli_args = {k: v for k, v in vars(args).items() if k != "command"}
-        dispatcher = Dispatcher(self, container or DIContainer(), middleware)
+        token = raw[0]
         try:
-            result = dispatcher.dispatch(args.command, cli_args)
+            entry = self.get(token)
+        except UnknownCommandError:
+            suggestion = self._suggest(token)
+            if suggestion:
+                print(f"Did you mean '{suggestion}'?")
+            else:
+                print("Unknown command")
+            raise SystemExit(2)
+
+        try:
+            kwargs = parse_command_args(entry, raw[1:])
+        except ParseError as exc:
+            print(f"Error: {exc}")
+            print(render_command_usage(entry))
+            raise SystemExit(2)
+
+        try:
+            result = entry.handler(**kwargs)
         except FrameworkError:
-            logger.warning("Framework error while running command '%s'.", args.command, exc_info=True)
             raise
         except Exception as exc:
-            logger.exception("Unhandled command failure in run() for '%s'.", args.command)
-            raise CommandExecutionError(args.command, str(exc)) from exc
+            logger.exception("Unhandled command failure in run() for '%s'.", entry.name)
+            raise CommandExecutionError(entry.name, str(exc)) from exc
 
         if print_result and result is not None:
             print(result)
 
         return result
 
-    def _normalize_argv(self, argv: Sequence[str]) -> list[str]:
-        """Map command aliases like ``-g`` or ``--greet`` to the command name."""
-        normalized = list(argv)
-        if not normalized:
-            return normalized
-
-        first = normalized[0]
-        alias_map: dict[str, str] = {}
-        for entry in self._commands.values():
-            for option in entry.options:
-                alias_map[option] = entry.name
-                stripped = option.lstrip("-")
-                if stripped:
-                    alias_map[stripped] = entry.name
-
-        if first in alias_map:
-            normalized[0] = alias_map[first]
-
-        return normalized
+    def clear(self) -> None:
+        self._commands.clear()
+        self._aliases.clear()
+        self._pending_args.clear()
+        self._pending_options.clear()
 
     # ------------------------------------------------------------------
-    # Merging (plugin / modular support)
+    # Internal helpers
     # ------------------------------------------------------------------
 
-    def merge(self, other: "CommandRegistry", *, allow_override: bool = False) -> None:
-        """
-        Merge all commands from *other* into this registry.
+    @staticmethod
+    def _normalize_alias(token: str) -> str:
+        return token.lstrip("-").strip()
 
-        Args:
-            other:           The registry to merge in.
-            allow_override:  If False (default), raises DuplicateCommandError
-                             on name collisions. If True, *other* wins.
-        """
-        for name, entry in other.all().items():
-            if name in self._commands and not allow_override:
-                raise DuplicateCommandError(name)
-            self._commands[name] = entry
+    def _assert_command_slot_available(self, command_name: str) -> None:
+        if command_name in self._commands:
+            raise DuplicateCommandError(command_name)
+
+        if command_name in self._aliases:
+            raise DuplicateCommandError(command_name)
+
+    def _assert_options_available(self, command_name: str, options: Sequence[str]) -> None:
+        for flag in options:
+            normalized = self._normalize_alias(flag)
+            if not normalized:
+                raise ValueError(f"Invalid option '{flag}'.")
+
+            if normalized in self._commands and normalized != command_name:
+                raise DuplicateCommandError(flag)
+
+            existing = self._aliases.get(normalized)
+            if existing is not None and existing != command_name:
+                raise DuplicateCommandError(flag)
+
+    @staticmethod
+    def _derive_command_name(options: Sequence[str], fallback: str) -> str:
+        for flag in options:
+            if flag.startswith("--") and len(flag) > 2:
+                return flag[2:]
+        return fallback
+
+    def _build_arguments(
+        self,
+        fn: Callable[..., Any],
+        staged_args: Sequence[_StagedArgument],
+    ) -> list[ArgumentEntry]:
+        params = get_params(fn)
+        params_by_name = {param.name: param for param in params}
+
+        for staged in staged_args:
+            if staged.name not in params_by_name:
+                raise ValueError(
+                    f"@argument('{staged.name}') does not match any parameter on '{fn.__name__}'."
+                )
+
+        explicit_by_name = {item.name: item for item in staged_args}
+        ordered: list[ArgumentEntry] = []
+
+        # Explicit @argument entries are authoritative and preserve decorator order.
+        for staged in staged_args:
+            param = params_by_name[staged.name]
+            annotation = self._resolve_annotation(staged.arg_type, param.annotation)
+            required, default = self._resolve_requirement(
+                annotation=annotation,
+                param_has_default=param.has_default,
+                param_default=param.default,
+                explicit_default=staged.default,
+            )
+            ordered.append(
+                ArgumentEntry(
+                    name=staged.name,
+                    type=annotation,
+                    help_text=staged.help_text,
+                    required=required,
+                    default=default,
+                )
+            )
+
+        # Fallback for undeclared params uses function signature inference.
+        for param in params:
+            if param.name in explicit_by_name:
+                continue
+
+            annotation = self._resolve_annotation(MISSING, param.annotation)
+            required, default = self._resolve_requirement(
+                annotation=annotation,
+                param_has_default=param.has_default,
+                param_default=param.default,
+                explicit_default=MISSING,
+            )
+            ordered.append(
+                ArgumentEntry(
+                    name=param.name,
+                    type=annotation,
+                    help_text="",
+                    required=required,
+                    default=default,
+                )
+            )
+
+        return ordered
+
+    @staticmethod
+    def _resolve_annotation(explicit_type: Any, annotation: Any) -> Any:
+        if explicit_type is not MISSING:
+            return explicit_type
+        if annotation is inspect.Parameter.empty:
+            return str
+        return annotation
+
+    @staticmethod
+    def _resolve_requirement(
+        *,
+        annotation: Any,
+        param_has_default: bool,
+        param_default: Any,
+        explicit_default: Any,
+    ) -> tuple[bool, Any]:
+        if explicit_default is not MISSING:
+            return False, explicit_default
+
+        if param_has_default:
+            return False, param_default
+
+        if is_bool_flag(annotation):
+            return False, False
+
+        if is_optional(annotation):
+            return False, None
+
+        return True, MISSING
+
+    def _suggest(self, token: str) -> str | None:
+        candidates = set(self._commands)
+        candidates.update(self._aliases)
+        matches = get_close_matches(self._normalize_alias(token), sorted(candidates), n=1)
+        if not matches:
+            return None
+
+        guess = matches[0]
+        if guess in self._aliases:
+            return self._aliases[guess]
+        return guess
 
     def __len__(self) -> int:
         return len(self._commands)

@@ -1,49 +1,46 @@
-from __future__ import annotations
-
-import logging
-
 import pytest
 
-from decorates.cli import CommandRegistry, CommandExecutionError, DependencyNotFoundError, Dispatcher, DIContainer
+import decorates.cli as cli
+from decorates.cli import CommandExecutionError
 
 
-class Service:
-    pass
+@pytest.fixture(autouse=True)
+def _reset_registry():
+    cli.reset_registry()
+    yield
+    cli.reset_registry()
 
 
 class TestCliErrorHandling:
     def test_run_wraps_unhandled_handler_exception(self):
-        reg = CommandRegistry()
-
-        @reg.register(name="boom")
+        @cli.register(description="Boom")
+        @cli.option("--boom")
         def boom() -> None:
             raise RuntimeError("boom")
 
         with pytest.raises(CommandExecutionError, match="Command 'boom' failed: boom"):
-            reg.run(["boom"], print_result=False)
+            cli.run(["boom"], print_result=False)
 
-    def test_run_preserves_decorates_errors(self):
-        reg = CommandRegistry()
+    def test_parse_error_exits_with_code_2(self):
+        @cli.register(description="Add")
+        @cli.option("--add")
+        @cli.argument("x", type=int)
+        def add(x: int) -> int:
+            return x + 1
 
-        @reg.register(name="needs_dep")
-        def needs_dep(service: Service):
-            return service
+        with pytest.raises(SystemExit) as exc:
+            cli.run(["add", "not-an-int"], print_result=False)
 
-        with pytest.raises(DependencyNotFoundError):
-            reg.run(["needs_dep"], print_result=False)
+        assert exc.value.code == 2
 
-    def test_dispatch_logs_unhandled_exception(self, caplog):
-        caplog.set_level(logging.ERROR)
+    def test_empty_argv_prints_commands_and_exits(self, capsys):
+        @cli.register(description="Noop")
+        @cli.option("--noop")
+        def noop() -> None:
+            return None
 
-        reg = CommandRegistry()
+        with pytest.raises(SystemExit) as exc:
+            cli.run([], print_result=False)
 
-        @reg.register(name="explode")
-        def explode() -> None:
-            raise ValueError("kaboom")
-
-        dispatcher = Dispatcher(reg, DIContainer())
-
-        with pytest.raises(ValueError):
-            dispatcher.dispatch("explode", {})
-
-        assert "Unhandled exception during command 'explode' execution." in caplog.text
+        assert exc.value.code == 1
+        assert "Available commands:" in capsys.readouterr().out

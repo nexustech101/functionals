@@ -1,29 +1,31 @@
 """
-A lightweight, decorates-based CLI decorates.
+Decorator-driven CLI tooling.
 
-Public API surface::
+Public, ergonomic entrypoints are module-level decorators and helpers:
 
-    from decorates.cli import (
-        CommandRegistry,
-        DIContainer,
-        MiddlewareChain,
-        Dispatcher,
-        CommandExecutionError,
-        build_parser,
-        load_plugins,
-        logging_middleware_pre,
-        logging_middleware_post,
-    )
+    import decorates.cli as cli
+
+    @cli.register(description="Say hello")
+    @cli.argument("name")
+    @cli.option("--hello")
+    def hello(name: str) -> str:
+        return f"Hello, {name}!"
+
+    if __name__ == "__main__":
+        cli.run()
 """
 
-from decorates.cli.dispatcher import Dispatcher
-from decorates.cli.middleware import (
-    MiddlewareChain,
-    logging_middleware_post,
-    logging_middleware_pre,
-)
-from decorates.cli.parser import build_parser
 from decorates.cli.container import DIContainer
+from decorates.cli.decorators import (
+    argument,
+    get_registry,
+    list_commands,
+    option,
+    register,
+    reset_registry,
+    run,
+)
+from decorates.cli.dispatcher import Dispatcher
 from decorates.cli.exceptions import (
     CommandExecutionError,
     DependencyNotFoundError,
@@ -32,16 +34,37 @@ from decorates.cli.exceptions import (
     PluginLoadError,
     UnknownCommandError,
 )
-from decorates.cli.registry import CommandRegistry
+from decorates.cli.middleware import (
+    MiddlewareChain,
+    logging_middleware_post,
+    logging_middleware_pre,
+)
+from decorates.cli.parser import ParseError, parse_command_args
 from decorates.cli.plugins import load_plugins
+from decorates.cli.registry import ArgumentEntry, CommandEntry, CommandRegistry, MISSING
 
 __all__ = [
-    # Core decorates
+    # Module-level command API
+    "register",
+    "argument",
+    "option",
+    "run",
+    "list_commands",
+    "get_registry",
+    "reset_registry",
+
+    # Internal / advanced surfaces
     "CommandRegistry",
+    "CommandEntry",
+    "ArgumentEntry",
+    "MISSING",
+    "parse_command_args",
+    "ParseError",
+
+    # Legacy advanced runtime components
     "DIContainer",
     "Dispatcher",
     "MiddlewareChain",
-    "build_parser",
     "load_plugins",
     "logging_middleware_pre",
     "logging_middleware_post",

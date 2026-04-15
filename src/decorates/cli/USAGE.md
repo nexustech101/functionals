@@ -1,29 +1,19 @@
 # Building CLI Tools With `decorates.cli`
 
-`decorates.cli` is a lightweight decorator-based decorates for building command-line tools from ordinary Python functions.
-It is backed by a robust automated test suite and designed for production-grade diagnostics through clear exceptions and logging.
-
-It supports two usage styles:
-
-1. Full-control bootstrapping with `build_parser()` and `Dispatcher()`
-2. A simple script-friendly flow with `@registry.register(...)` and `registry.run()`
-
-This guide focuses on the second style, because it is the fastest way to build a small CLI.
+`decorates.cli` is now module-first: you define commands with module-level
+decorators (`register`, `argument`, `option`) and execute them with `run()`.
 
 ## Quick Start
 
 ```python
-from decorates.cli import CommandRegistry
-
-cli = CommandRegistry()
+import decorates.cli as cli
 
 
-@cli.register(
-    options=["-g", "--greet"],
-    name="greet",
-    description="Greet someone by name",
-)
-def greet_cli(name: str) -> str:
+@cli.register(description="Greet someone")
+@cli.argument("name", type=str, help="Person to greet")
+@cli.option("--greet")
+@cli.option("-g")
+def greet(name: str) -> str:
     return f"Hello, {name}!"
 
 
@@ -34,206 +24,82 @@ if __name__ == "__main__":
 Run it like:
 
 ```bash
-python test.py greet Alice
-python test.py --greet Alice
-python test.py g Alice
+python app.py greet Alice
+python app.py --greet Alice
+python app.py -g Alice
 ```
 
-## Core Concepts
+## Command Decorators
 
-### 1. Create a registry
+### `@register(...)`
 
-The registry stores cli metadata and handler functions.
+Finalizes a function as a command.
 
 ```python
-from decorates.cli import CommandRegistry
-
-cli = CommandRegistry()
+@cli.register(name="add", description="Add a todo")
 ```
 
-### 2. Register clis with decorates
+- `name` is optional.
+- If `name` is omitted, the command name is inferred from the first long option
+  (`--add` -> `add`).
+- If no long option exists, it falls back to the function name.
 
-Each decorated function becomes a subcli.
+### `@argument(...)`
+
+Defines command argument metadata.
 
 ```python
-@cli.register(
-    options=["-a", "--add"],
-    name="add",
-    description="Add two integers",
-)
-def add_cli(num1: int, num2: int) -> str:
-    return str(num1 + num2)
+@cli.argument("title", type=str, help="Todo title")
+@cli.argument("description", type=str, default="")
 ```
 
-Arguments are inferred from annotations:
+- Explicit `@argument` declarations are authoritative for ordering/type/help.
+- Any function params without `@argument` still work via annotation/default
+  inference.
 
-| Python annotation | CLI behavior |
-| --- | --- |
-| `str` | required positional string |
-| `int` | required positional integer |
-| `float` | required positional float |
-| `bool` | optional `--flag` |
-| `Optional[T]` or defaulted args | optional `--arg value` |
+### `@option(...)`
 
-### 3. Run the CLI
-
-`registry.run()` builds the parser, parses arguments, dispatches the cli, and prints any non-`None` return value.
+Adds command aliases.
 
 ```python
-if __name__ == "__main__":
-    cli.run()
+@cli.option("--add")
+@cli.option("-a")
 ```
 
-You can also pass explicit arguments during tests:
-
-```python
-result = cli.run(["add", "2", "3"], print_result=False)
-assert result == "5"
-```
-
-## About `options`
-
-The `options` field lets you define cli aliases in a compact style:
-
-```python
-options=["-g", "--greet"]
-```
-
-With that metadata, all of these forms work:
+These aliases are valid for the command token:
 
 ```bash
-python test.py greet Alice
-python test.py --greet Alice
-python test.py g Alice
+python todo.py add "Buy groceries"
+python todo.py --add "Buy groceries"
+python todo.py -a "Buy groceries"
 ```
 
-The canonical cli name is still the `name=` value.
+## Parsing Behavior
 
-## Standardized Error Handling
+For non-boolean arguments, both positional and named forms are supported:
 
-The decorates keeps error handling predictable:
-
-- decorates-level issues (`UnknownCommandError`, `DependencyNotFoundError`, etc.) are raised directly
-- unexpected command-handler failures invoked through `registry.run()` are wrapped as `CommandExecutionError` with the original exception chained
-- logs are emitted via `decorates.cli.*` loggers so applications can route them centrally
-
-You can still add app-level wrappers/policies as needed:
-
-```python
-import functools
-import logging
-import sys
-from typing import Any, Callable
-
-
-def exception_handler(handle_exit: bool = True, log_errors: bool = True) -> Callable:
-    def decorator(func: Callable) -> Callable:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs) -> Any:
-            try:
-                return func(*args, **kwargs)
-            except KeyboardInterrupt:
-                if log_errors:
-                    logging.info("Interrupted by user.")
-                sys.exit(0)
-            except Exception as exc:
-                if log_errors:
-                    logging.error("cli failed: %s", exc)
-                print(f"Error: {exc}", file=sys.stderr)
-                if handle_exit:
-                    sys.exit(1)
-                raise
-        return wrapper
-    return decorator
+```bash
+python todo.py add "Read a book" "Start to finish"
+python todo.py add --title "Read a book" --description "Start to finish"
+python todo.py add "Read a book" --description "Start to finish"
 ```
 
-Optional logger setup:
+Boolean arguments are flag-style:
 
-```python
-import logging
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
+```bash
+python app.py run --verbose
 ```
 
-Usage:
+If the same argument is passed twice with different values, parsing fails.
 
-```python
-@cli.register(
-    options=["-m", "--multiply"],
-    name="multiply",
-    description="Multiply two integers",
-)
-@exception_handler()
-def multiply_cli(num1: int, num2: int) -> str:
-    return str(num1 * num2)
-```
+## Runtime Helpers
 
-## Listing clis
+- `cli.run(argv=None, print_result=True)` executes the default module registry.
+- `cli.list_commands()` prints registered commands and aliases.
+- `cli.reset_registry()` clears registry state (useful in tests).
 
-For lightweight scripts, you can expose a built-in registry view:
+## Error Handling
 
-```python
-@cli.register(
-    options=["-l", "--list"],
-    name="list",
-    description="List all registered clis",
-)
-def list_clis() -> None:
-    cli.list_clis()
-```
-
-## Dependency Injection
-
-For larger apps, `decorates.cli` still supports the lower-level DI container and dispatcher flow.
-
-```python
-from decorates.cli import CommandRegistry, DIContainer, Dispatcher, build_parser
-
-registry = CommandRegistry()
-container = DIContainer()
-
-container.register(UserService, UserService(...))
-
-
-@registry.register("create-user", help_text="Create a user")
-def create_user(username: str, svc: UserService) -> None:
-    svc.create(username)
-
-
-parser = build_parser(registry, container)
-dispatcher = Dispatcher(registry, container)
-args = parser.parse_args()
-
-if args.cli:
-    cli_args = {k: v for k, v in vars(args).items() if k != "cli"}
-    dispatcher.dispatch(args.cli, cli_args)
-```
-
-When a parameter's type is registered in the container, it is injected automatically and hidden from the CLI.
-
-## Recommended Project Layout
-
-For a small single-file utility:
-
-```text
-my_tool/
-  test.py
-```
-
-For a larger project:
-
-```text
-my_tool/
-  app/
-    main.py
-    clis/
-    services/
-    persistence/
-```
-
-## Reference Example
-
-A full working example using this style lives in the repository root at `test.py`.
+- Unknown command: prints suggestion when available and exits with status `2`.
+- Parse errors: prints a specific error + command usage and exits with status `2`.
+- Handler crashes: wrapped as `CommandExecutionError` with exception chaining.

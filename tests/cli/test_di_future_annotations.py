@@ -1,30 +1,22 @@
 from __future__ import annotations
 
-from decorates.cli import CommandRegistry, DIContainer, Dispatcher
-from decorates.cli.parser import build_parser
+import pytest
+
+import decorates.cli as cli
 
 
-class GreeterService:
-    def greet(self, name: str) -> str:
-        return f"Hello, {name}!"
+@pytest.fixture(autouse=True)
+def _reset_registry():
+    cli.reset_registry()
+    yield
+    cli.reset_registry()
 
 
-def test_cli_di_future_annotations_resolve_correctly():
-    cli = CommandRegistry()
-    container = DIContainer()
-    container.register(GreeterService, GreeterService())
+def test_inferred_arguments_resolve_future_annotations():
+    @cli.register(description="Hello")
+    @cli.option("--hello")
+    def hello(name: "str", excited: "bool" = False) -> str:
+        return f"Hello, {name}{'!' if excited else '.'}"
 
-    @cli.register(name="hello")
-    def hello(name: str, service: GreeterService) -> str:
-        return service.greet(name)
-
-    parser = build_parser(cli, container)
-    parsed = parser.parse_args(["hello", "Alice"])
-
-    assert parsed.command == "hello"
-    assert parsed.name == "Alice"
-    assert not hasattr(parsed, "service")
-
-    dispatcher = Dispatcher(cli, container)
-    result = dispatcher.dispatch(parsed.command, {"name": parsed.name})
-    assert result == "Hello, Alice!"
+    assert cli.run(["hello", "Alice"], print_result=False) == "Hello, Alice."
+    assert cli.run(["hello", "Alice", "--excited"], print_result=False) == "Hello, Alice!"

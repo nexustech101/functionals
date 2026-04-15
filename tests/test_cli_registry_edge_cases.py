@@ -1,396 +1,143 @@
 import pytest
-import asyncio
-import inspect
-import sys
-from typing import Optional, Literal
 
-from decorates.cli.registry import (
-    CommandRegistry,
-    DuplicateCommandError,
-    UnknownCommandError,
-)
-from decorates.cli.container import DIContainer, DependencyNotFoundError
-from decorates.cli.parser import build_parser
-from decorates.cli.dispatcher import Dispatcher
-from decorates.cli.middleware import MiddlewareChain
+import decorates.cli as cli
 
 
-# --------------------------------------------------
-# 1. REGISTRATION & COLLISION TESTS
-# --------------------------------------------------
-
-def test_duplicate_command_names():
-    reg = CommandRegistry()
-    reg.register(name="deploy")(lambda: None)
-
-    with pytest.raises(DuplicateCommandError):
-        reg.register(name="deploy")(lambda: None)
+@pytest.fixture(autouse=True)
+def _reset_registry():
+    cli.reset_registry()
+    yield
+    cli.reset_registry()
 
 
-def test_alias_collision_across_commands():
-    reg = CommandRegistry()
-    reg.register(name="sync", options=["-s"])(lambda: None)
+def _register_todo_commands() -> None:
+    @cli.register(description="Add a new todo item")
+    @cli.argument("title", type=str, help="Title of the todo item")
+    @cli.argument("description", type=str, help="Description of the todo item", default="")
+    @cli.option("--add")
+    @cli.option("-a")
+    def add_todo(title: str, description: str = "") -> str:
+        return f"Added todo: {title} | {description}"
 
-    with pytest.raises(DuplicateCommandError):
-        reg.register(name="status", options=["-s"])(lambda: None)
-
-
-def test_alias_collision_with_command_name():
-    reg = CommandRegistry()
-    reg.register(name="sync")(lambda: None)
-
-    with pytest.raises(DuplicateCommandError):
-        reg.register(name="status", options=["sync"])(lambda: None)
-
-
-# --------------------------------------------------
-# 2. ARGUMENT PARSING EDGE CASES
-# --------------------------------------------------
-
-def test_type_coercion_failure():
-    reg = CommandRegistry()
-
-    @reg.register(name="add")
-    def add(x: int):
-        return x + 1
-
-    parser = build_parser(reg)
-
-    with pytest.raises(SystemExit):
-        parser.parse_args(["add", "abc"])
+    @cli.register(description="Update todo")
+    @cli.argument("todo_id", type=int, help="Todo id")
+    @cli.argument("title", type=str, help="Title", default=None)
+    @cli.argument("description", type=str, help="Description", default=None)
+    @cli.option("--update")
+    @cli.option("-u")
+    def update_todo(todo_id: int, title: str | None = None, description: str | None = None) -> tuple[int, str | None, str | None]:
+        return (todo_id, title, description)
 
 
-def test_bool_flag_behavior():
-    reg = CommandRegistry()
 
-    @reg.register(name="run")
-    def run(verbose: bool = False):
+def test_add_supports_positional_and_alias_command_tokens():
+    _register_todo_commands()
+
+    assert (
+        cli.run(["add", "Buy groceries", "Milk, eggs, bread"], print_result=False)
+        == "Added todo: Buy groceries | Milk, eggs, bread"
+    )
+    assert (
+        cli.run(["--add", "Read a book", "Read start to finish"], print_result=False)
+        == "Added todo: Read a book | Read start to finish"
+    )
+
+
+def test_add_supports_named_arguments():
+    _register_todo_commands()
+
+    result = cli.run(
+        ["add", "--title", "Read a book", "--description", "Read start to finish"],
+        print_result=False,
+    )
+
+    assert result == "Added todo: Read a book | Read start to finish"
+
+
+def test_update_supports_positional_named_and_mixed_forms():
+    _register_todo_commands()
+
+    assert cli.run(["update", "1", "Read two books", "Finish both novels"], print_result=False) == (
+        1,
+        "Read two books",
+        "Finish both novels",
+    )
+
+    assert cli.run(
+        [
+            "--update",
+            "1",
+            "--title",
+            "Read two books",
+            "--description",
+            "Finish both novels",
+        ],
+        print_result=False,
+    ) == (1, "Read two books", "Finish both novels")
+
+    assert cli.run(
+        ["update", "1", "Read two books", "--description", "Finish both novels"],
+        print_result=False,
+    ) == (1, "Read two books", "Finish both novels")
+
+
+def test_duplicate_argument_with_different_values_is_parse_error(capsys):
+    _register_todo_commands()
+
+    with pytest.raises(SystemExit) as exc:
+        cli.run(["add", "Task A", "--title", "Task B"], print_result=False)
+
+    assert exc.value.code == 2
+    out = capsys.readouterr().out
+    assert "provided multiple times with different values" in out
+
+
+def test_duplicate_argument_with_same_values_is_allowed():
+    _register_todo_commands()
+
+    result = cli.run(["add", "Task A", "--title", "Task A"], print_result=False)
+    assert result == "Added todo: Task A | "
+
+
+def test_boolean_flag_parsing_uses_flag_style():
+    @cli.register(description="Run command")
+    @cli.option("--run")
+    @cli.argument("verbose", type=bool, help="Enable verbose mode")
+    def run_cmd(verbose: bool = False) -> bool:
         return verbose
 
-    parser = build_parser(reg)
+    assert cli.run(["run"], print_result=False) is False
+    assert cli.run(["run", "--verbose"], print_result=False) is True
 
-    ns = parser.parse_args(["run"])
-    assert ns.verbose is False
 
-    ns = parser.parse_args(["run", "--verbose"])
-    assert ns.verbose is True
+def test_unknown_option_prints_parse_error(capsys):
+    _register_todo_commands()
 
-    with pytest.raises(SystemExit):
-        parser.parse_args(["run", "--verbose", "false"])
+    with pytest.raises(SystemExit) as exc:
+        cli.run(["add", "--unknown", "x"], print_result=False)
 
-
-def test_optional_argument_behavior():
-    reg = CommandRegistry()
-
-    @reg.register(name="run")
-    def run(output: Optional[str] = None):
-        return output
-
-    parser = build_parser(reg)
-
-    ns = parser.parse_args(["run"])
-    assert ns.output is None
-
-
-def test_missing_required_argument():
-    reg = CommandRegistry()
-
-    @reg.register(name="run")
-    def run(name: str):
-        return name
-
-    parser = build_parser(reg)
-
-    with pytest.raises(SystemExit):
-        parser.parse_args(["run"])
-
-
-def test_default_value_usage():
-    reg = CommandRegistry()
-
-    @reg.register(name="run")
-    def run(limit: int = 10):
-        return limit
-
-    parser = build_parser(reg)
-
-    ns = parser.parse_args(["run"])
-    assert ns.limit == 10
-
-
-def test_default_value_missing_flag_value():
-    reg = CommandRegistry()
-
-    @reg.register(name="run")
-    def run(limit: int = 10):
-        return limit
-
-    parser = build_parser(reg)
-
-    with pytest.raises(SystemExit):
-        parser.parse_args(["run", "--limit"])
-
-
-def test_enum_argument_valid():
-    reg = CommandRegistry()
-
-    @reg.register(name="deploy")
-    def deploy(env: Literal["dev", "prod"]):
-        return env
-
-    parser = build_parser(reg)
-
-    ns = parser.parse_args(["deploy", "dev"])
-    assert ns.env == "dev"
-
-
-def test_enum_argument_invalid():
-    reg = CommandRegistry()
-
-    @reg.register(name="deploy")
-    def deploy(env: Literal["dev", "prod"]):
-        return env
-
-    parser = build_parser(reg)
-
-    with pytest.raises(SystemExit):
-        parser.parse_args(["deploy", "staging"])
-
-
-# --------------------------------------------------
-# 3. DISPATCH + EXECUTION PIPELINE
-# --------------------------------------------------
-
-def test_dispatch_success():
-    reg = CommandRegistry()
-
-    @reg.register(name="hello")
-    def hello():
-        return "world"
-
-    dispatcher = Dispatcher(reg, DIContainer())
-
-    result = dispatcher.dispatch("hello", {})
-    assert result == "world"
-
-
-def test_unknown_command_dispatch():
-    reg = CommandRegistry()
-    dispatcher = Dispatcher(reg, DIContainer())
-
-    with pytest.raises(UnknownCommandError):
-        dispatcher.dispatch("missing", {})
-
-
-def test_dispatch_argument_passing():
-    reg = CommandRegistry()
-
-    @reg.register(name="add")
-    def add(x: int, y: int):
-        return x + y
-
-    dispatcher = Dispatcher(reg, DIContainer())
-
-    result = dispatcher.dispatch("add", {"x": 2, "y": 3})
-    assert result == 5
-
-
-# --------------------------------------------------
-# 4. DEPENDENCY INJECTION
-# --------------------------------------------------
-
-def test_dependency_injection_success():
-    reg = CommandRegistry()
-    container = DIContainer()
-
-    class DB:
-        def ping(self):
-            return "ok"
-
-    container.register(DB, DB())
-
-    @reg.register(name="run")
-    def run(db: DB):
-        return db.ping()
-
-    dispatcher = Dispatcher(reg, container)
-
-    result = dispatcher.dispatch("run", {})
-    assert result == "ok"
-
-
-def test_missing_dependency():
-    reg = CommandRegistry()
-    container = DIContainer()
-
-    @reg.register(name="run")
-    def run(db):
-        return db
-
-    dispatcher = Dispatcher(reg, container)
-
-    with pytest.raises(DependencyNotFoundError):
-        dispatcher.dispatch("run", {})
-
-
-def test_di_not_exposed_to_cli():
-    reg = CommandRegistry()
-
-    class DB: ...
-
-    @reg.register(name="run")
-    def run(db: DB):
-        return db
-
-    parser = build_parser(reg)
-
-    # DB should not appear as CLI argument
-    ns = parser.parse_args(["run"])
-    assert not hasattr(ns, "db")
-
-
-# --------------------------------------------------
-# 5. MIDDLEWARE
-# --------------------------------------------------
-
-def test_middleware_execution_order():
-    reg = CommandRegistry()
-
-    @reg.register(name="cmd")
-    def cmd():
-        return "ok"
-
-    order = []
-
-    def pre1(cmd, kwargs): order.append("pre1")
-    def pre2(cmd, kwargs): order.append("pre2")
-    def post1(cmd, result): order.append("post1")
-    def post2(cmd, result): order.append("post2")
-
-    chain = MiddlewareChain()
-    chain.add_pre(pre1)
-    chain.add_pre(pre2)
-    chain.add_post(post1)
-    chain.add_post(post2)
-
-    dispatcher = Dispatcher(reg, DIContainer(), chain)
-    dispatcher.dispatch("cmd", {})
-
-    assert order == ["pre1", "pre2", "post1", "post2"]
-
-
-def test_middleware_pre_failure_stops_execution():
-    reg = CommandRegistry()
-
-    called = {"executed": False}
-
-    @reg.register(name="cmd")
-    def cmd():
-        called["executed"] = True
-
-    def fail_pre(cmd, kwargs):
-        raise RuntimeError("fail")
-
-    chain = MiddlewareChain()
-    chain.add_pre(fail_pre)
-
-    dispatcher = Dispatcher(reg, DIContainer(), chain)
-
-    with pytest.raises(RuntimeError):
-        dispatcher.dispatch("cmd", {})
-
-    assert called["executed"] is False
-
-
-# --------------------------------------------------
-# 6. ASYNC SUPPORT
-# --------------------------------------------------
-
-@pytest.mark.asyncio
-@pytest.mark.skipif(sys.version_info < (3, 8), reason="Requires Python 3.8+")
-async def test_async_command():
-    reg = CommandRegistry()
-
-    @reg.register(name="async_cmd")
-    async def async_cmd():
-        return 42
-
-    dispatcher = Dispatcher(reg, DIContainer())
-
-    if inspect.iscoroutinefunction(async_cmd):
-        result = await dispatcher.dispatch("async_cmd", {})
-        assert result == 42
-
-
-# --------------------------------------------------
-# 7. HELP & UX
-# --------------------------------------------------
-
-def test_help_output(capsys):
-    reg = CommandRegistry()
-
-    @reg.register(name="greet", description="Say hello", options=["-g"])
-    def greet(name: str):
-        pass
-
-    parser = build_parser(reg)
-
-    with pytest.raises(SystemExit):
-        parser.parse_args(["--help"])
-
+    assert exc.value.code == 2
     out = capsys.readouterr().out
-
-    assert "greet" in out
-    assert "Say hello" in out
-    assert "-g" in out
+    assert "Unknown option '--unknown'" in out
 
 
-def test_unknown_command_suggestion(capsys):
-    reg = CommandRegistry()
+def test_unknown_command_shows_suggestion(capsys):
+    _register_todo_commands()
 
-    @reg.register(name="hello")
-    def hello():
-        pass
+    with pytest.raises(SystemExit) as exc:
+        cli.run(["ad"], print_result=False)
 
-    parser = build_parser(reg)
-
-    with pytest.raises(SystemExit):
-        parser.parse_args(["helo"])
-
+    assert exc.value.code == 2
     out = capsys.readouterr().out
-
-    assert "Unknown command" in out or "Did you mean" in out
-
-
-# --------------------------------------------------
-# 8. EDGE CASES
-# --------------------------------------------------
-
-def test_empty_registry_run():
-    reg = CommandRegistry()
-    parser = build_parser(reg)
-
-    with pytest.raises(SystemExit):
-        parser.parse_args([])
+    assert "Did you mean 'add'" in out
 
 
-def test_command_returns_none():
-    reg = CommandRegistry()
+def test_inferred_arguments_work_when_argument_decorator_is_omitted():
+    @cli.register(description="Multiply")
+    @cli.option("--multiply")
+    def multiply(num1: int, num2: int = 1) -> int:
+        return num1 * num2
 
-    @reg.register(name="noop")
-    def noop():
-        return None
-
-    dispatcher = Dispatcher(reg, DIContainer())
-
-    result = dispatcher.dispatch("noop", {})
-    assert result is None
-
-
-def test_large_number_of_commands():
-    reg = CommandRegistry()
-
-    for i in range(100):
-        reg.register(name=f"cmd{i}")(lambda: i)
-
-    assert len(reg._commands) == 100
+    assert cli.run(["multiply", "3", "4"], print_result=False) == 12
+    assert cli.run(["multiply", "3", "--num2", "5"], print_result=False) == 15
+    assert cli.run(["--multiply", "3"], print_result=False) == 3

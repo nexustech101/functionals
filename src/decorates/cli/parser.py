@@ -1,186 +1,188 @@
 """
-Builds an ``argparse.ArgumentParser`` from a :class:`CommandRegistry`.
-
-All knowledge of argparse lives here. The rest of the decorates never
-imports argparse directly. This keeps the parser easily swappable and
-the dispatcher clean.
+Command-spec parser for module-first CLI commands.
 """
 
 from __future__ import annotations
 
-import argparse
+from enum import Enum
 import inspect
-import logging
-from typing import TYPE_CHECKING, Any, get_origin, get_args, Literal
+import types
+from typing import Any, Literal, Union, get_args, get_origin
 
-from decorates.cli.registry import CommandRegistry
-from decorates.cli.utils.reflection import get_params
-from decorates.cli.utils.typing import is_bool_flag, is_optional, resolve_argparse_type
-
-if TYPE_CHECKING:
-    from decorates.cli.container import DIContainer
-
-logger = logging.getLogger(__name__)
+from decorates.cli.registry import ArgumentEntry, CommandEntry, MISSING
 
 
-class SuggestingArgumentParser(argparse.ArgumentParser):
-    """ArgumentParser with fuzzy command suggestions."""
-
-    def __init__(self, *args, **kwargs):
-        self._registry = None  # will be set later
-        super().__init__(*args, **kwargs)
-
-    def error(self, message):
-        from difflib import get_close_matches
-        import re
-
-        if "invalid choice" in message:
-            match = re.search(r"'(.+?)'", message)
-            if match:
-                cmd = match.group(1)
-                matches = get_close_matches(cmd, self._registry.all().keys()) if self._registry else []
-
-                if matches:
-                    print(f"Did you mean '{matches[0]}'?")
-                    logger.info(
-                        "Argparse invalid command '%s'; suggested '%s'.",
-                        cmd,
-                        matches[0],
-                    )
-                else:
-                    print("Unknown command")
-                    logger.info("Argparse invalid command '%s' with no suggestion.", cmd)
-
-        logger.debug("Argparse error: %s", message)
-        super().error(message)
+class ParseError(ValueError):
+    """Raised when command arguments cannot be parsed."""
 
 
-def build_parser(
-    registry: CommandRegistry,
-    container: "DIContainer | None" = None,
-) -> argparse.ArgumentParser:
-    """
-    Construct a top-level ArgumentParser with one subparser per command.
+def parse_command_args(entry: CommandEntry, tokens: list[str]) -> dict[str, Any]:
+    """Parse raw CLI tokens (after command token) into handler kwargs."""
 
-    Parameters whose type is registered in *container* are skipped —
-    they are DI-injected at dispatch time and must not appear on the CLI.
+    named_flags = _named_argument_flags(entry.arguments)
+    positional_pool = [arg for arg in entry.arguments if not _is_bool_annotation(arg.type)]
 
-    Argument behaviour for everything else:
-    * bool              → --flag  (store_true)
-    * Optional[X] / default → --arg (optional keyword)
-    * required primitive    → positional argument
-    """
-    parser = SuggestingArgumentParser(
-        description="Built with decorates.cli",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
+    values: dict[str, Any] = {}
 
-    parser._registry = registry  # type: ignore[attr-defined]
+    def set_value(arg: ArgumentEntry, value: Any, *, source: str) -> None:
+        existing = values.get(arg.name, MISSING)
+        if existing is not MISSING:
+            if existing != value:
+                raise ParseError(
+                    f"Argument '{arg.name}' was provided multiple times with different values."
+                )
+            return
 
-    subparsers = parser.add_subparsers(dest="command", metavar="<command>")
+        values[arg.name] = value
 
-    for name, entry in registry.all().items():
-        sub = subparsers.add_parser(
-            name,
-            help=_format_help(entry),
-            description=entry.description or entry.help_text,
-            aliases=_command_aliases(entry),
-        )
-        _add_arguments(sub, entry.handler, container)
+    pos_index = 0
+    idx = 0
 
-    # Empty registry behavior: fail at parse time (matches tests)
-    if not registry.all():
-        def _fail(*args, **kwargs):
-            raise SystemExit(1)
-        parser.parse_args = _fail
+    while idx < len(tokens):
+        token = tokens[idx]
 
-    return parser
+        if token in named_flags:
+            arg = named_flags[token]
 
-
-def _add_arguments(
-    subparser: argparse.ArgumentParser,
-    fn: Any,
-    container: "DIContainer | None" = None,
-) -> None:
-    """Add CLI arguments to *subparser* from *fn*'s signature.
-
-    Service parameters (types known to *container*) are skipped entirely.
-    """
-    for param in get_params(fn):
-        annotation = param.annotation
-
-        # Skip DI parameters (typed classes, not primitives)
-        if (
-            annotation is not inspect.Parameter.empty
-            and isinstance(annotation, type)
-            and annotation not in (str, int, float, bool)
-        ):
-            # If container exists, only skip if resolvable
-            if container is None or container.has(annotation):
+            if _is_bool_annotation(arg.type):
+                set_value(arg, True, source=token)
+                idx += 1
                 continue
 
-        # Boolean flags
-        if is_bool_flag(annotation):
-            subparser.add_argument(
-                f"--{param.name}",
-                action="store_true",
-                default=param.default if param.has_default else False,
-                help=f"{param.name} (flag)",
-            )
+            idx += 1
+            if idx >= len(tokens):
+                raise ParseError(f"Missing value for option '{token}'.")
+
+            raw_value = tokens[idx]
+            if raw_value in named_flags:
+                raise ParseError(f"Missing value for option '{token}'.")
+
+            coerced = _coerce_value(raw_value, arg.type, arg.name)
+            set_value(arg, coerced, source=token)
+            idx += 1
             continue
 
-        # Literal[...] (enum)
-        if get_origin(annotation) is Literal:
-            choices = get_args(annotation)
+        if token.startswith("--"):
+            raise ParseError(f"Unknown option '{token}'.")
 
-            if param.has_default:
-                subparser.add_argument(
-                    f"--{param.name}",
-                    dest=param.name,
-                    choices=choices,
-                    default=param.default,
-                )
-            else:
-                subparser.add_argument(
-                    param.name,
-                    choices=choices,
-                )
+        while pos_index < len(positional_pool) and positional_pool[pos_index].name in values:
+            pos_index += 1
+
+        if pos_index >= len(positional_pool):
+            raise ParseError(f"Unexpected argument '{token}'.")
+
+        target = positional_pool[pos_index]
+        coerced = _coerce_value(token, target.type, target.name)
+        set_value(target, coerced, source="positional")
+        pos_index += 1
+        idx += 1
+
+    for arg in entry.arguments:
+        if arg.name in values:
             continue
 
-        arg_type = resolve_argparse_type(annotation)
+        if arg.default is not MISSING:
+            values[arg.name] = arg.default
+            continue
 
-        optional = param.has_default or is_optional(annotation)
+        if _is_bool_annotation(arg.type):
+            values[arg.name] = False
+            continue
 
-        if optional:
-            subparser.add_argument(
-                f"--{param.name}",
-                dest=param.name,
-                default=param.default if param.has_default else None,
-                required=False,
-                type=arg_type,
-            )
-        else:
-            subparser.add_argument(
-                param.name,
-                type=arg_type,
-            )
+        if not arg.required:
+            values[arg.name] = None
+            continue
+
+        raise ParseError(f"Missing required argument '{arg.name}'.")
+
+    return values
 
 
-def _command_aliases(entry: Any) -> list[str]:
-    """
-    Convert metadata aliases into argparse subcommand aliases.
+def render_command_usage(entry: CommandEntry) -> str:
+    """Render a compact usage string for parse failures."""
 
-    ``options`` entries like ``-g`` and ``--greet`` are normalized to ``g``
-    and ``greet`` for argparse, while ``registry.run()`` still accepts
-    the original flag-style tokens.
-    """
-    aliases: list[str] = []
-    for op in getattr(entry, "options", ()):
-        aliases.append(op.lstrip("-"))
-    return aliases
+    parts: list[str] = []
+    for arg in entry.arguments:
+        flag = f"--{arg.name.replace('_', '-')}"
+        if _is_bool_annotation(arg.type):
+            parts.append(f"[{flag}]")
+            continue
+
+        if arg.required:
+            parts.append(f"<{arg.name}>")
+            continue
+
+        parts.append(f"[<{arg.name}> | {flag} VALUE]")
+
+    suffix = " ".join(parts)
+    if suffix:
+        return f"usage: {entry.name} {suffix}"
+    return f"usage: {entry.name}"
 
 
-def _format_help(entry: Any) -> str:
-    """Include original options in help output (fixes test expectations)."""
-    options = " ".join(entry.options) if entry.options else ""
-    return f"{entry.help_text} {options}".strip()
+def _named_argument_flags(arguments: tuple[ArgumentEntry, ...]) -> dict[str, ArgumentEntry]:
+    flags: dict[str, ArgumentEntry] = {}
+    for arg in arguments:
+        dashed = arg.name.replace("_", "-")
+        tokens = [f"--{arg.name}", f"--{dashed}"]
+        for token in tokens:
+            flags[token] = arg
+    return flags
+
+
+def _coerce_value(raw: str, annotation: Any, arg_name: str) -> Any:
+    target = _unwrap_optional(annotation)
+
+    if target in (Any, inspect.Parameter.empty):
+        return raw
+
+    origin = get_origin(target)
+    if origin is Literal:
+        choices = get_args(target)
+        for choice in choices:
+            if raw == str(choice):
+                return choice
+        allowed = ", ".join(repr(choice) for choice in choices)
+        raise ParseError(f"Invalid value for '{arg_name}'. Allowed values: {allowed}.")
+
+    if inspect.isclass(target) and issubclass(target, Enum):
+        try:
+            return target(raw)
+        except ValueError:
+            try:
+                return target[raw]
+            except KeyError as exc:
+                allowed = ", ".join(member.value for member in target)  # type: ignore[arg-type]
+                raise ParseError(
+                    f"Invalid value for '{arg_name}'. Allowed values: {allowed}."
+                ) from exc
+
+    if target is str:
+        return raw
+
+    if target is bool:
+        lowered = raw.lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+        raise ParseError(f"Invalid boolean value for '{arg_name}': {raw!r}.")
+
+    try:
+        return target(raw)
+    except Exception as exc:
+        raise ParseError(f"Invalid value for '{arg_name}': {raw!r}.") from exc
+
+
+def _is_bool_annotation(annotation: Any) -> bool:
+    target = _unwrap_optional(annotation)
+    return target is bool
+
+
+def _unwrap_optional(annotation: Any) -> Any:
+    origin = get_origin(annotation)
+    if origin in (Union, types.UnionType):
+        args = [arg for arg in get_args(annotation) if arg is not type(None)]
+        if len(args) == 1:
+            return args[0]
+    return annotation
