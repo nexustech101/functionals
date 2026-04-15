@@ -1,5 +1,5 @@
 """
-Focused migration and schema-evolution tests for registers.db.
+Focused migration and schema-evolution tests for framework.db.
 """
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import inspect, text
 
 from conftest import db_url
-from registers.db import database_registry
+from framework.db import database_registry
 
 
 class TestSchemaMigrations:

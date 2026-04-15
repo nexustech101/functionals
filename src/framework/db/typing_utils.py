@@ -1,6 +1,4 @@
 """
-registers.db.typing_utils
-~~~~~~~~~~~~~~~~~~~~~~~~
 Maps Python / Pydantic type annotations to SQLAlchemy column types.
 Handles Optional, Union, constrained types, and JSON fallback.
 """

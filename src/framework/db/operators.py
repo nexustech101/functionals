@@ -1,6 +1,4 @@
 """
-registers.db.operators
-~~~~~~~~~~~~~~~~~~~~~~
 Query operator parsing for ``DatabaseRegistry.filter()`` style lookups.
 """
 

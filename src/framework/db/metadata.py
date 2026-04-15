@@ -1,6 +1,4 @@
 """
-registers.db.metadata
-~~~~~~~~~~~~~~~~~~~~
 Immutable configuration for a single model registration.
 Validated at decoration time so problems surface immediately.
 """
@@ -12,8 +10,8 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from registers.db.exceptions import ConfigurationError
-from registers.db.typing_utils import annotation_is_integer, field_allows_none
+from framework.db.exceptions import ConfigurationError
+from framework.db.typing_utils import annotation_is_integer, field_allows_none
 
 
 @dataclass(frozen=True)

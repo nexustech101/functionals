@@ -1,6 +1,4 @@
 """
-registers.db.registry
-~~~~~~~~~~~~~~~~~~~~~
 ``DatabaseRegistry`` — the persistence manager attached to a model as
 ``Model.objects``.
 
@@ -46,8 +44,8 @@ from sqlalchemy import Column, MetaData, Table, delete, func, inspect, select, u
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
-from registers.db.engine import dialect_insert, dispose_engine, get_engine
-from registers.db.exceptions import (
+from framework.db.engine import dialect_insert, dispose_engine, get_engine
+from framework.db.exceptions import (
     DuplicateKeyError,
     ImmutableFieldError,
     InvalidPrimaryKeyAssignmentError,
@@ -57,11 +55,11 @@ from registers.db.exceptions import (
     SchemaError,
     UniqueConstraintError,
 )
-from registers.db.metadata import RegistryConfig
-from registers.db.operators import VALID_OPERATORS, is_iterable_value, parse_criterion, split_field_expr
-from registers.db.schema import SchemaManager
-from registers.db.security import hash_password, is_password_hash
-from registers.db.typing_utils import (
+from framework.db.metadata import RegistryConfig
+from framework.db.operators import VALID_OPERATORS, is_iterable_value, parse_criterion, split_field_expr
+from framework.db.schema import SchemaManager
+from framework.db.security import hash_password, is_password_hash
+from framework.db.typing_utils import (
     default_database_url,
     default_table_name,
     field_allows_none,
@@ -70,7 +68,7 @@ from registers.db.typing_utils import (
 )
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
-_ORIGINAL_KEY_ATTR = "__registers_original_key__"
+_ORIGINAL_KEY_ATTR = "__framework_original_key__"
 _PASSWORD_FIELD = "password"
 logger = logging.getLogger(__name__)
 

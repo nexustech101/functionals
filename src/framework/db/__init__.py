@@ -1,6 +1,4 @@
 """
-registers.db
-~~~~~~~~~~~~
 Decorator-driven persistence registry for Pydantic models.
 
 Quick start
@@ -9,7 +7,7 @@ Quick start
 ::
 
     from pydantic import BaseModel
-    from registers.db import database_registry
+    from framework.db import database_registry
 
     @database_registry(
         "sqlite:///users.db",
@@ -34,9 +32,9 @@ Quick start
     User.schema_exists()
 """
 
-from registers.db.decorators import database_registry
-from registers.db.engine import dispose_all, dispose_engine, get_engine
-from registers.db.exceptions import (
+from framework.db.decorators import database_registry
+from framework.db.engine import dispose_all, dispose_engine, get_engine
+from framework.db.exceptions import (
     ConfigurationError,
     DuplicateKeyError,
     ImmutableFieldError,
@@ -50,12 +48,12 @@ from registers.db.exceptions import (
     SchemaError,
     UniqueConstraintError,
 )
-from registers.db.registry import DatabaseRegistry
-from registers.db.relations import BelongsTo, HasMany, HasManyThrough
-from registers.db.schema import SchemaManager
-from registers.db.metadata import RegistryConfig
-from registers.db.fields import db_field
-from registers.db.security import hash_password, is_password_hash, verify_password
+from framework.db.registry import DatabaseRegistry
+from framework.db.relations import BelongsTo, HasMany, HasManyThrough
+from framework.db.schema import SchemaManager
+from framework.db.metadata import RegistryConfig
+from framework.db.fields import db_field
+from framework.db.security import hash_password, is_password_hash, verify_password
 
 __all__ = [
     # Core

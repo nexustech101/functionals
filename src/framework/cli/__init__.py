@@ -1,9 +1,9 @@
 """
-A lightweight, registers-based CLI framework.
+A lightweight, framework-based CLI framework.
 
 Public API surface::
 
-    from registers.cli import (
+    from framework.cli import (
         CommandRegistry,
         DIContainer,
         MiddlewareChain,
@@ -16,15 +16,15 @@ Public API surface::
     )
 """
 
-from registers.cli.dispatcher import Dispatcher
-from registers.cli.middleware import (
+from framework.cli.dispatcher import Dispatcher
+from framework.cli.middleware import (
     MiddlewareChain,
     logging_middleware_post,
     logging_middleware_pre,
 )
-from registers.cli.parser import build_parser
-from registers.cli.container import DIContainer
-from registers.cli.exceptions import (
+from framework.cli.parser import build_parser
+from framework.cli.container import DIContainer
+from framework.cli.exceptions import (
     CommandExecutionError,
     DependencyNotFoundError,
     DuplicateCommandError,
@@ -32,8 +32,8 @@ from registers.cli.exceptions import (
     PluginLoadError,
     UnknownCommandError,
 )
-from registers.cli.registry import CommandRegistry
-from registers.cli.plugins import load_plugins
+from framework.cli.registry import CommandRegistry
+from framework.cli.plugins import load_plugins
 
 __all__ = [
     # Core framework

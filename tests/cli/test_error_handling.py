@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from registers.cli import CommandRegistry, CommandExecutionError, DependencyNotFoundError, Dispatcher, DIContainer
+from framework.cli import CommandRegistry, CommandExecutionError, DependencyNotFoundError, Dispatcher, DIContainer
 
 
 class Service:

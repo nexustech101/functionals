@@ -15,12 +15,12 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from registers.db import dispose_all
+from framework.db import dispose_all
 
 DOCKER_COMPOSE_FILE = ROOT / "docker-compose.test-db.yml"
 BACKEND_URLS = {
-    "postgres": "postgresql+psycopg://registers:registers@127.0.0.1:54329/registers_test",
-    "mysql": "mysql+pymysql://registers:registers@127.0.0.1:33069/registers_test",
+    "postgres": "postgresql+psycopg://framework:framework@127.0.0.1:54329/framework_test",
+    "mysql": "mysql+pymysql://framework:framework@127.0.0.1:33069/framework_test",
 }
 
 

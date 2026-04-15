@@ -1,6 +1,4 @@
 """
-registers.db.schema
-~~~~~~~~~~~~~~~~~~
 Safe, additive schema evolution without a full migration framework.
 
 Philosophy
@@ -35,8 +33,8 @@ from sqlalchemy import Column, MetaData, Table, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
-from registers.db.exceptions import MigrationError, SchemaError
-from registers.db.typing_utils import sqlalchemy_type_for_annotation
+from framework.db.exceptions import MigrationError, SchemaError
+from framework.db.typing_utils import sqlalchemy_type_for_annotation
 
 logger = logging.getLogger(__name__)
 

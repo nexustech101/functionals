@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel
 
 from conftest import db_url
-from registers.db import database_registry
+from framework.db import database_registry
 
 
 class TestSQLiteConcurrency:

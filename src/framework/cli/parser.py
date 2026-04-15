@@ -13,12 +13,12 @@ import inspect
 import logging
 from typing import TYPE_CHECKING, Any, get_origin, get_args, Literal
 
-from registers.cli.registry import CommandRegistry
-from registers.cli.utils.reflection import get_params
-from registers.cli.utils.typing import is_bool_flag, is_optional, resolve_argparse_type
+from framework.cli.registry import CommandRegistry
+from framework.cli.utils.reflection import get_params
+from framework.cli.utils.typing import is_bool_flag, is_optional, resolve_argparse_type
 
 if TYPE_CHECKING:
-    from registers.cli.container import DIContainer
+    from framework.cli.container import DIContainer
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def build_parser(
     * required primitive    → positional argument
     """
     parser = SuggestingArgumentParser(
-        description="Built with registers.cli",
+        description="Built with framework.cli",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 

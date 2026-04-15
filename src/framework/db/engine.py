@@ -1,6 +1,4 @@
 """
-registers.db.engine
-~~~~~~~~~~~~~~~~~~~
 Centralised engine / connection-pool management.
 
 Design decisions

@@ -2,13 +2,13 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: registers
-      POSTGRES_PASSWORD: registers
-      POSTGRES_DB: registers_test
+      POSTGRES_USER: framework
+      POSTGRES_PASSWORD: framework
+      POSTGRES_DB: framework_test
     ports:
       - "54329:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U registers -d registers_test"]
+      test: ["CMD-SHELL", "pg_isready -U framework -d framework_test"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -17,9 +17,9 @@ services:
     image: mysql:8.0
     environment:
       MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: registers_test
-      MYSQL_USER: registers
-      MYSQL_PASSWORD: registers
+      MYSQL_DATABASE: framework_test
+      MYSQL_USER: framework
+      MYSQL_PASSWORD: framework
     ports:
       - "33069:3306"
     healthcheck:

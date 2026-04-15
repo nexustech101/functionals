@@ -1,16 +1,16 @@
-# registers
+# Framework
 
 Decorator-driven tooling for Python:
 
-- `registers.cli` for ergonomic command-line apps
-- `registers.db` for Pydantic + SQLAlchemy persistence
+- `framework.cli` for ergonomic command-line apps
+- `framework.db` for Pydantic + SQLAlchemy persistence
 
 The philosophy is simple: minimal setup, predictable behavior, and a fast path to shipping.
 
 ## Install
 
 ```bash
-pip install registers
+pip install framework
 ```
 
 ## Quick Start Guide
@@ -22,7 +22,7 @@ pip install registers
 ### CLI in 60 seconds
 
 ```python
-from registers.cli import CommandRegistry
+from framework.cli import CommandRegistry
 
 cli = CommandRegistry()
 
@@ -73,7 +73,7 @@ Available commands:
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from registers.db import (
+from framework.db import (
     RecordNotFoundError,
     UniqueConstraintError,
     database_registry,
@@ -184,26 +184,26 @@ def list_orders_asc(limit: int = 20, offset: int = 0):  # Filter by newest  (n..
 
 ## Core Concepts
 
-### `registers.cli`
+### `framework.cli`
 
 - Register functions as commands with `@cli.register(...)`.
 - Type annotations drive argument parsing.
 - Optional command aliases with `options=["-x", "--long"]`.
 - Optional DI (`DIContainer`) and middleware (`MiddlewareChain`).
 - `CommandRegistry.run()` preserves framework exceptions and wraps unexpected handler crashes as `CommandExecutionError` (with original exception chaining).
-- Operational logs use standard Python logging namespaces under `registers.cli.*`.
+- Operational logs use standard Python logging namespaces under `framework.cli.*`.
 
-### `registers.db`
+### `framework.db`
 
 - Register `BaseModel` classes with `@database_registry(...)`.
 - Access all persistence through `Model.objects`.
 - `id: int | None = None` gives database-managed autoincrement IDs.
 - Schema helpers are available as class methods: `create_schema`, `drop_schema`, `schema_exists`, `truncate`.
 - Unexpected SQLAlchemy runtime failures are normalized into `SchemaError` for cleaner, predictable error handling.
-- Operational logs use standard Python logging namespaces under `registers.db.*`.
+- Operational logs use standard Python logging namespaces under `framework.db.*`.
 - DB exceptions provide structured metadata (`exc.context`, `exc.to_dict()`) for production diagnostics.
 
-## `registers.db` Usage Snapshot
+## `framework.db` Usage Snapshot
 
 ```python
 # Filtering operators
@@ -230,9 +230,9 @@ If your model contains a field named `password`, password values are automatical
 
 ## Documentation
 
-- DB guide: `src/registers/db/USAGE.md`
-- CLI source API: `src/registers/cli`
-- DB source API: `src/registers/db`
+- DB guide: `src/framework/db/USAGE.md`
+- CLI source API: `src/framework/cli`
+- DB source API: `src/framework/db`
 
 ## Requirements
 

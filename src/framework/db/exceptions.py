@@ -1,6 +1,4 @@
 """
-registers.db.exceptions
-~~~~~~~~~~~~~~~~~~~~~~~
 All package-defined exceptions in one place.
 
 Hierarchy
@@ -23,7 +21,7 @@ from typing import Any
 
 
 class RegistryError(Exception):
-    """Base class for all registers.db exceptions with optional structured context."""
+    """Base class for all framework.db exceptions with optional structured context."""
 
     def __init__(
         self,

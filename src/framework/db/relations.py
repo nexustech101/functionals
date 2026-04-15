@@ -1,6 +1,4 @@
 """
-registers.db.relations
-~~~~~~~~~~~~~~~~~~~~~~
 Explicit, lazy-loaded relationship descriptors.
 
 Usage pattern
@@ -48,7 +46,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from registers.db.exceptions import RelationshipError
+from framework.db.exceptions import RelationshipError
 
 if TYPE_CHECKING:
     from pydantic import BaseModel

@@ -7,7 +7,7 @@ is needed.
 
 Usage::
 
-    from registers.cli import load_plugins
+    from framework.cli import load_plugins
     from app.commands import user_commands  # treated as a package
 
     load_plugins("app.commands", registry)
@@ -24,8 +24,8 @@ import logging
 import pkgutil
 from types import ModuleType
 
-from registers.cli.exceptions import PluginLoadError
-from registers.cli.registry import CommandRegistry
+from framework.cli.exceptions import PluginLoadError
+from framework.cli.registry import CommandRegistry
 
 logger = logging.getLogger(__name__)
 

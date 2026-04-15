@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from conftest import db_url
-from registers.db import BelongsTo, HasMany, database_registry
+from framework.db import BelongsTo, HasMany, database_registry
 
 
 class TestRelationshipEdgeCases:
