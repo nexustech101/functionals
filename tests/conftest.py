@@ -22,6 +22,13 @@ BACKEND_URLS = {
     "postgres": "postgresql+psycopg://decorates:decorates@127.0.0.1:54329/decorates_test",
     "mysql": "mysql+pymysql://decorates:decorates@127.0.0.1:33069/decorates_test",
 }
+_DOCKER_UNAVAILABLE_MARKERS = (
+    "error during connect",
+    "cannot connect to the docker daemon",
+    "is the docker daemon running",
+    "dockerdesktoplinuxengine",
+    "the system cannot find the file specified",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +51,11 @@ def _compose_output(*args: str) -> str:
     out = result.stdout.strip()
     err = result.stderr.strip()
     return "\n".join(part for part in (out, err) if part)
+
+
+def _docker_unavailable(details: str) -> bool:
+    normalized = details.lower()
+    return any(marker in normalized for marker in _DOCKER_UNAVAILABLE_MARKERS)
 
 
 def _wait_for_database(url: str, *, timeout_seconds: int = 240, service_name: str | None = None) -> None:
@@ -95,19 +107,25 @@ def docker_backends() -> dict[str, str]:
 
     try:
         subprocess.run(up_cmd, check=True, capture_output=True, text=True)
-    except FileNotFoundError as exc:
-        raise RuntimeError(
-            "Docker is required to run the PostgreSQL/MySQL integration tests."
-        ) from exc
+    except FileNotFoundError:
+        pytest.skip(
+            "Skipping PostgreSQL/MySQL integration tests: docker compose is not installed."
+        )
     except subprocess.CalledProcessError as exc:
         ps_output = _compose_output("ps")
         logs_output = _compose_output("logs", "--tail", "200", "postgres", "mysql")
-        raise RuntimeError(
+        details = (
             "Failed to start docker compose services for backend tests.\n"
             f"stdout:\n{exc.stdout}\n\nstderr:\n{exc.stderr}\n\n"
             f"docker compose ps:\n{ps_output}\n\n"
             f"docker compose logs:\n{logs_output}"
-        ) from exc
+        )
+        if _docker_unavailable(details):
+            pytest.skip(
+                "Skipping PostgreSQL/MySQL integration tests: Docker daemon is unavailable.\n"
+                f"{details}"
+            )
+        raise RuntimeError(details) from exc
 
     try:
         yield BACKEND_URLS

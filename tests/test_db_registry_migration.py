@@ -41,6 +41,23 @@ class TestSchemaMigrations:
             value = conn.execute(text("SELECT email FROM users WHERE id = 1")).scalar_one()
         assert value == ""
 
+    def test_add_non_nullable_integer_column_uses_numeric_backfill_on_sqlite(self, tmp_path):
+        @database_registry(db_url(tmp_path), table_name="users", key_field="id")
+        class User(BaseModel):
+            id: int
+            name: str
+
+        User.objects.create(id=1, name="Alice")
+        User.objects.add_column("age", int, nullable=False)
+
+        with User.objects._engine.begin() as conn:
+            value, sqlite_type = conn.execute(
+                text("SELECT age, typeof(age) FROM users WHERE id = 1")
+            ).one()
+
+        assert value == 0
+        assert sqlite_type == "integer"
+
     def test_ensure_column_is_reentrant_for_startup_migrations(self, tmp_path):
         @database_registry(db_url(tmp_path), table_name="events", key_field="id")
         class Event(BaseModel):

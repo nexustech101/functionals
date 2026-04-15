@@ -29,9 +29,24 @@ import logging
 import sqlite3
 from typing import Any
 
-from sqlalchemy import Column, MetaData, Table, inspect, text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    Float,
+    Integer,
+    MetaData,
+    Numeric,
+    String,
+    Table,
+    inspect,
+    text,
+)
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlalchemy.sql.type_api import TypeEngine
 
 from decorates.db.exceptions import MigrationError, SchemaError
 from decorates.db.typing_utils import sqlalchemy_type_for_annotation
@@ -50,6 +65,35 @@ def _build_rename_table_sql(engine: Engine, source: str, target: str) -> str:
     if engine.dialect.name in {"mysql", "mariadb"}:
         return f"RENAME TABLE {source_ident} TO {target_ident}"
     return f"ALTER TABLE {source_ident} RENAME TO {target_ident}"
+
+
+def _sqlite_default_sql_for_not_null_column(sa_type: TypeEngine[Any]) -> str:
+    """
+    Return a type-safe SQLite DEFAULT literal for ADD COLUMN ... NOT NULL.
+
+    SQLite requires a DEFAULT when adding NOT NULL columns to existing tables.
+    The default must align with column affinity to avoid semantically wrong data
+    such as storing text defaults in numeric columns.
+    """
+    if isinstance(sa_type, (Integer, Boolean)):
+        return "0"
+    if isinstance(sa_type, (Float, Numeric)):
+        return "0"
+    if isinstance(sa_type, String):
+        return "''"
+    if isinstance(sa_type, Date):
+        return "'1970-01-01'"
+    if isinstance(sa_type, DateTime):
+        return "'1970-01-01 00:00:00'"
+    if isinstance(sa_type, JSON):
+        return "'{}'"
+
+    raise MigrationError(
+        "Cannot derive a type-safe SQLite DEFAULT for a non-null column "
+        f"with SQL type '{sa_type}'. Add the column as nullable=True and "
+        "backfill values before enforcing NOT NULL.",
+        operation="add_column",
+    )
 
 
 class SchemaManager:
@@ -167,7 +211,8 @@ class SchemaManager:
         if not nullable:
             # SQLite requires a DEFAULT when adding NOT NULL columns.
             if self._engine.dialect.name == "sqlite":
-                col_ddl += " NOT NULL DEFAULT ''"
+                default_sql = _sqlite_default_sql_for_not_null_column(sa_type)
+                col_ddl += f" NOT NULL DEFAULT {default_sql}"
             else:
                 col_ddl += " NOT NULL"
 
@@ -260,4 +305,3 @@ class SchemaManager:
         except Exception:
             pass
         return False
-
