@@ -23,103 +23,123 @@ if __name__ == "__main__":
 
 ## Example 2
 
+Absolutely. Here’s a cleaner, more professional version with less repetition and clearer command names.
+
 ```python
-import time
+from __future__ import annotations
+
+from enum import StrEnum
+from time import strftime
+
 import decorates.cli as cli
 import decorates.db as db
 from decorates.db import db_field
 from pydantic import BaseModel
-from enum import Enum
+
+DB_PATH = "todos.db"
+TABLE = "todos"
+NOW = lambda: strftime("%Y-%m-%d %H:%M:%S")
 
 
-DATABASE = "todos.db"
-TABLE_NAME = "todos"
-
-class TodoStatus(str, Enum):
+class TodoStatus(StrEnum):
     PENDING = "pending"
     COMPLETED = "completed"
 
-@db.database_registry(
-    DATABASE,
-    table_name=TABLE_NAME,
-    key_field="id"
-)
+
+@db.database_registry(DB_PATH, table_name=TABLE, key_field="id")
 class TodoItem(BaseModel):
-    id: int | None = None  # Required id=None for autoincrement
+    id: int | None = None
     title: str = db_field(index=True)
     description: str = db_field(default="")
     status: TodoStatus = db_field(default=TodoStatus.PENDING.value)
-    created_at: str = db_field(default_factory=lambda: time.strftime("%Y-%m-%d %H:%M:%S"))
-    updated_at: str = db_field(default_factory=lambda: time.strftime("%Y-%m-%d %H:%M:%S"))
+    created_at: str = db_field(default_factory=NOW)
+    updated_at: str = db_field(default_factory=NOW)
 
 
-@cli.register(description="Add a new todo item")
-@cli.argument("title", type=str, help="Title of the todo item")
-@cli.argument("description", type=str, help="Description of the todo item", default="")
-@cli.option("--add", help="Add a new todo item")
-@cli.option("-a", help="Add a new todo item")
+@cli.register(name="add", description="Create a todo item")
+@cli.argument("title", type=str, help="Todo title")
+@cli.argument("description", type=str, default="", help="Todo description")
+@cli.option("--add")
+@cli.option("-a")
 def add_todo(title: str, description: str = "") -> str:
     todo = TodoItem(title=title, description=description)
     todo.save()
-    return f"Added todo: {todo.title} (ID: {todo.id})"
+    return f"Added: {todo.title} (ID: {todo.id})"
 
-@cli.register(description="List all todo items")
-@cli.option("--list", help="List all todo items")
-@cli.option("-l", help="List all todo items")
+
+@cli.register(name="list", description="List todo items")
+@cli.option("--list")
+@cli.option("-l")
 def list_todos() -> str:
     todos = TodoItem.objects.all()
     if not todos:
         return "No todo items found."
-    return "\n".join([f"{todo.id}: {todo.title} - {todo.status}" for todo in todos])
+    return "\n".join(f"{t.id}: {t.title} [{t.status}]" for t in todos)
 
-@cli.register(description="Mark a todo item as completed")
-@cli.argument("todo_id", type=int, help="ID of the todo item to mark as completed")
+
+@cli.register(name="complete", description="Mark a todo item as completed")
+@cli.argument("todo_id", type=int, help="Todo ID")
+@cli.option("--complete")
+@cli.option("-c")
 def complete_todo(todo_id: int) -> str:
     todo = TodoItem.objects.get(id=todo_id)
-
     if not todo:
         return f"Todo item with ID {todo_id} not found."
-    
+
     todo.status = TodoStatus.COMPLETED.value
-    todo.updated_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    todo.updated_at = NOW()
     todo.save()
+    return f"Completed todo ID {todo_id}."
 
-    return f"Marked todo ID {todo_id} as completed."
 
-@cli.register(description="Update a todo item")
-@cli.argument("todo_id", type=int, help="ID of the todo item to update")
-@cli.argument("title", type=str, help="New title of the todo item", default=None)
-@cli.argument("description", type=str, help="New description of the todo item", default=None)
-def update_todo(todo_id: int, title: str = None, description: str = None) -> str:
+@cli.register(name="update", description="Update a todo item")
+@cli.argument("todo_id", type=int, help="Todo ID")
+@cli.argument("title", type=str, default=None, help="New title")
+@cli.argument("description", type=str, default=None, help="New description")
+@cli.option("--update")
+@cli.option("-u")
+def update_todo(todo_id: int, title: str | None = None, description: str | None = None) -> str:
     todo = TodoItem.objects.get(id=todo_id)
-
     if not todo:
         return f"Todo item with ID {todo_id} not found."
-    
-    if title:
+
+    if title is not None:
         todo.title = title
-    if description:
+    if description is not None:
         todo.description = description
 
-    todo.updated_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    todo.updated_at = NOW()
     todo.save()
-
     return f"Updated todo ID {todo_id}."
+
 
 if __name__ == "__main__":
     cli.run()
 ```
 
-Run it like:
+Run it as follows:
 
 ```bash
-python app.py greet Alice
-python app.py --greet Alice
-python app.py -g Alice
-python app.py help
-python app.py help greet
-python app.py --help
-python app.py -h
+# Add
+python todo.py add "Buy groceries" "Milk, eggs, bread"
+python todo.py --add "Buy groceries" "Milk, eggs, bread"
+python todo.py -a "Buy groceries" "Milk, eggs, bread"
+python todo.py add --title "Buy groceries" --description "Milk, eggs, bread"
+
+# List
+python todo.py list
+python todo.py --list
+python todo.py -l
+
+# Complete
+python todo.py complete 1
+python todo.py --complete 1
+python todo.py -c 1
+
+# Update
+python todo.py update 1 "Read two books" "Finish both novels this week"
+python todo.py update 1 --title "Read two books" --description "Finish both novels this week"
+python todo.py --update 1 --title "Read two books"
 ```
 
 ## Command Decorators
