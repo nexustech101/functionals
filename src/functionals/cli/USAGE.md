@@ -295,7 +295,7 @@ Arguments
 - `cli.run(argv=None, print_result=True)` executes the default module registry.
 - `cli.run(...)` also accepts shell controls:
   `shell_prompt`, `shell_title`, `shell_description`, `shell_banner`,
-  `shell_colors`, and `shell_input_fn`.
+  `shell_colors`, `shell_input_fn`, and `shell_usage`.
 - `cli.run_shell(...)` starts an interactive REPL for the default module registry.
 - `cli.list_commands()` prints registered commands and aliases.
 - `cli.reset_registry()` clears registry state (useful in tests).
@@ -414,4 +414,3 @@ Added: Buy milk (ID: 1)
 - Unknown command: prints suggestion when available and exits with status `2`.
 - Parse errors: prints a specific error + command usage and exits with status `2`.
 - Handler crashes: wrapped as `CommandExecutionError` with exception chaining.
-

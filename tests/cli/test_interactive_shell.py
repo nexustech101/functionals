@@ -156,6 +156,23 @@ def test_interactive_mode_supports_shell_local_commands(capsys):
     assert "title  (str, required)" in out
 
 
+def test_interactive_mode_can_print_help_menu_on_startup(capsys):
+    _register_interactive_commands()
+
+    cli.run_shell(
+        input_fn=_input_from_lines(["quit"]),
+        print_result=False,
+        banner=False,
+        colors=False,
+        shell_usage=True,
+    )
+
+    out = capsys.readouterr().out
+    assert "Shell builtins" in out
+    assert "Registered commands" in out
+    assert "help <command>" in out
+
+
 def test_interactive_mode_renders_banner_by_default(monkeypatch, capsys):
     _register_interactive_commands()
 
@@ -305,6 +322,23 @@ def test_run_interactive_flag_uses_shell_customization(capsys):
     out = capsys.readouterr().out
     assert "Flag Shell" in out
     assert "Entered via flag." in out
+
+
+def test_run_interactive_flag_can_print_help_menu_on_startup(capsys):
+    _register_interactive_commands()
+
+    cli.run(
+        ["--interactive"],
+        print_result=False,
+        shell_input_fn=_input_from_lines(["quit"]),
+        shell_banner=False,
+        shell_colors=False,
+        shell_usage=True,
+    )
+
+    out = capsys.readouterr().out
+    assert "Shell builtins" in out
+    assert "Registered commands" in out
 
 
 def test_interactive_help_for_help_builtin_does_not_suggest_help(capsys):

@@ -139,6 +139,7 @@ class InteractiveShell:
         title: str = "Decorates CLI",
         description: str = "Type 'help' for shell help and 'exit' to quit.",
         colors: bool | None = None,
+        usage: bool = False,
     ) -> None:
         self._registry     = registry
         self._print_result = print_result
@@ -149,6 +150,7 @@ class InteractiveShell:
         self._title        = title
         self._description  = description
         self._colors       = _supports_color() if colors is None else colors
+        self._usage        = usage
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -161,6 +163,9 @@ class InteractiveShell:
         print(self._c(self._title,       _C.BOLD_CYAN))
         print(self._c(self._description, _C.DIM))
         print()
+        if self._usage:
+            print(self._render_full_help())
+            print()
 
         while True:
             raw = self._read_line()

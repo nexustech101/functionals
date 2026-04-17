@@ -79,6 +79,7 @@ def run(
     shell_title: str = "Decorates CLI",
     shell_description: str = "Type 'help' for shell help and 'exit' to quit.",
     shell_colors: bool | None = None,
+    shell_usage: bool = False,
 ) -> Any:
     """Run the module-level default registry."""
 
@@ -92,6 +93,7 @@ def run(
         shell_title=shell_title,
         shell_description=shell_description,
         shell_colors=shell_colors,
+        shell_usage=shell_usage,
     )
 
 
@@ -106,6 +108,7 @@ def run_shell(
     shell_title: str = "Decorates CLI",
     shell_description: str = "Type 'help' for shell help and 'exit' to quit.",
     colors: bool | None = None,
+    shell_usage: bool = False,
 ) -> None:
     """Run the module-level default registry in interactive mode."""
 
@@ -119,6 +122,7 @@ def run_shell(
         shell_title=shell_title,
         shell_description=shell_description,
         colors=colors,
+        shell_usage=shell_usage,
     )
 
 

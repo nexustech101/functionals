@@ -359,7 +359,7 @@ curl "http://localhost:8000/orders/desc?limit=20&offset=0"
 - `functionals.cli.run(...)` accepts shell options too, so one entrypoint can
   serve both normal CLI args and interactive mode.
   Options include `shell_prompt`, `shell_title`, `shell_description`,
-  `shell_banner`, and `shell_colors`.
+  `shell_banner`, `shell_colors`, `shell_input_fn`, and `shell_usage`.
 - Runtime wraps unexpected handler crashes as `CommandExecutionError` (with original exception chaining).
 - Operational logs use standard Python logging namespaces under `functionals.cli.*`.
 

@@ -223,6 +223,7 @@ class CommandRegistry:
         shell_title: str = "Functionals CLI",
         shell_description: str = "Type 'help' for shell help and 'exit' to quit.",
         shell_colors: bool | None = None,
+        shell_usage: bool = False,
     ) -> Any:
         from functionals.cli.parser import ParseError, parse_command_args, render_command_usage
 
@@ -240,6 +241,7 @@ class CommandRegistry:
                     shell_title=shell_title,
                     shell_description=shell_description,
                     colors=shell_colors,
+                    shell_usage=shell_usage,
                 )
             self.print_help(program_name=program_name)
             return None
@@ -259,6 +261,7 @@ class CommandRegistry:
                 shell_title=shell_title,
                 shell_description=shell_description,
                 colors=shell_colors,
+                shell_usage=shell_usage,
             )
 
         if self._is_builtin_help_token(token):
@@ -323,6 +326,7 @@ class CommandRegistry:
         shell_title: str = "Functionals CLI",
         shell_description: str = "Type 'help' for shell help and 'exit' to quit.",
         colors: bool | None = None,
+        shell_usage: bool = False,
     ) -> None:
         """Run this registry in interactive REPL mode."""
         from functionals.cli.shell import InteractiveShell
@@ -338,6 +342,7 @@ class CommandRegistry:
             title=title,
             description=shell_description,
             colors=colors,
+            usage=shell_usage,
         )
         shell.run()
         return None
