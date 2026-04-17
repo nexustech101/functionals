@@ -161,49 +161,6 @@ Interactive mode:
 
 ![Screenshot](image.png)
 
-```bash
-  ______          __         ______                       __   
- /_  __/___  ____/ /___     / ____/___  ____  _________  / /__ 
-  / / / __ \/ __  / __ \   / /   / __ \/ __ \/ ___/ __ \/ / _ \
- / / / /_/ / /_/ / /_/ /  / /___/ /_/ / / / (__  ) /_/ / /  __/
-/_/  \____/\__,_/\____/   \____/\____/_/ /_/____/\____/_/\___/
-Todo Console
-Manage tasks.
-
-> help
-Shell builtins
-  help            Show this menu
-  help <command>  Show detailed help for a specific command
-  commands        List all registered commands
-  exit / quit     Leave interactive mode
-
-Registered commands
-  add          Add a new todo item
-  delete       Delete a todo item
-  list         List all todo items
-  complete     Mark a todo item as completed
-  update       Update a todo item
-  greet        Greet someone by name
-  create_user  Create and persist a new user
-  list-users   List all persisted users
-  get-user     Get a user by ID
-
-Tip: run 'help <command>' for full argument details.
-> help add
-add
-  Add a new todo item
-
-  Usage    usage: test.py add <title> [<description> | --description VALUE]
-  Aliases  --add, -a
-
-Arguments
-  title  (str, required)                    Title of the todo item
-  description  (str, optional, default='')  Description of the todo item
-> exit
-
-Goodbye.
-```
-
 ### Database + FastAPI in 5 minutes
 
 ```python
