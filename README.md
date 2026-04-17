@@ -3,6 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/decorates)](https://pypi.org/project/decorates/)
 [![Python versions](https://img.shields.io/pypi/pyversions/decorates)](https://pypi.org/project/decorates/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Module](https://img.shields.io/badge/module-functionals-green)](#decorates)
 [![CLI](https://img.shields.io/badge/module-functionals.cli-blue)](#decoratescli)
 [![DB](https://img.shields.io/badge/module-functionals.db-darkorange)](#decoratesdb)
 [![Tests](https://img.shields.io/badge/tested-170%2B%20tests-brightgreen)](#testing)
@@ -26,7 +27,7 @@ pip install decorates  # Package name is `decorates`; module name is `functional
 2. Build one DB model with a decorator.
 3. Use `Model.objects` for CRUD.
 
-### CLI in 60 seconds
+### CLI in minutes
 
 ```python
 import functionals.cli as cli

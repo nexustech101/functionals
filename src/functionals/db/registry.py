@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any, Generator, Generic, Mapping, TypeVar
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from sqlalchemy import Column, MetaData, Table, delete, func, inspect, select, update
+from sqlalchemy import Column, ForeignKey, Index, MetaData, Table, delete, func, inspect, select, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
@@ -55,6 +55,7 @@ from functionals.db.exceptions import (
     SchemaError,
     UniqueConstraintError,
 )
+from functionals.db.fields import get_db_field_metadata
 from functionals.db.metadata import RegistryConfig
 from functionals.db.operators import VALID_OPERATORS, is_iterable_value, parse_criterion, split_field_expr
 from functionals.db.schema import SchemaManager
@@ -619,27 +620,47 @@ class DatabaseRegistry(Generic[ModelT]):
     def _build_table(self) -> Table:
         unique_set = set(self.config.unique_fields)
         columns: list[Column[Any]] = []
+        index_fields: list[str] = []
+        columns_by_name: dict[str, Column[Any]] = {}
 
         for field_name, field_info in self.model_cls.model_fields.items():
+            field_meta = get_db_field_metadata(field_info)
             sa_type = sqlalchemy_type_for_annotation(field_info.annotation)
             nullable = self._column_nullable(field_name, field_info)
             is_pk = field_name == self.key_field
 
+            col_args: list[Any] = []
+            fk_reference = field_meta.get("db_foreign_key")
+            if fk_reference:
+                col_args.append(ForeignKey(str(fk_reference)))
+
+            is_unique = field_name in unique_set or bool(field_meta.get("db_unique", False))
             col_kwargs: dict[str, Any] = {
                 "primary_key": is_pk,
                 "nullable": nullable,
-                "unique": field_name in unique_set,
+                "unique": is_unique,
             }
             if is_pk and self.config.autoincrement:
                 col_kwargs["autoincrement"] = True
 
-            columns.append(Column(field_name, sa_type, **col_kwargs))
+            column = Column(field_name, sa_type, *col_args, **col_kwargs)
+            columns.append(column)
+            columns_by_name[field_name] = column
+
+            should_index = bool(field_meta.get("db_index", False))
+            if should_index and not is_pk and not is_unique:
+                index_fields.append(field_name)
 
         table_kwargs: dict[str, Any] = {}
         if self.config.autoincrement and self.database_url.startswith("sqlite"):
             table_kwargs["sqlite_autoincrement"] = True
 
-        return Table(self.table_name, self._metadata, *columns, **table_kwargs)
+        index_specs = [
+            Index(f"ix_{self.table_name}_{field_name}", columns_by_name[field_name])
+            for field_name in index_fields
+        ]
+
+        return Table(self.table_name, self._metadata, *columns, *index_specs, **table_kwargs)
 
     def _capture_table_state(self) -> dict[str, Any]:
         return {
