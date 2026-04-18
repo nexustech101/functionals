@@ -34,6 +34,7 @@ htmlcov/
 
 # Databases and other miscellaneous files
 *.db
+*.fx
 *.log
 *.zip
 *.txt
