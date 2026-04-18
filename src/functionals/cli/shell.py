@@ -81,7 +81,7 @@ def _is_windows() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# ANSI palette — module-level so nothing leaks into the class namespace
+# ANSI palette - module-level so nothing leaks into the class namespace
 # ---------------------------------------------------------------------------
 
 class _C:
@@ -114,8 +114,8 @@ def _render_banner(text: str) -> str:
         pass
 
     width = max(len(text) + 8, 36)
-    bar = "─" * width
-    return f"┌{bar}┐\n│    {text.upper():<{width - 4}}│\n└{bar}┘"
+    bar = "-" * width
+    return f"+{bar}+\n|    {text.upper():<{width - 4}}|\n+{bar}+"
 
 
 # ---------------------------------------------------------------------------
@@ -167,12 +167,14 @@ class InteractiveShell:
         registry: Any,
         *,
         print_result: bool = True,
-        prompt: str = "› ",
+        prompt: str = "> ",
         program_name: str | None = None,
         input_fn: Callable[[str], str] | None = None,
         banner: bool = True,
         title: str = "Decorates CLI",
+        banner_text: str | None = None,
         description: str = "Type 'help' for shell help and 'exit' to quit.",
+        version_text: str | None = None,
         colors: bool | None = None,
         usage: bool = False,
     ) -> None:
@@ -185,7 +187,9 @@ class InteractiveShell:
         self._readline_enabled = self._using_builtin_input and _READLINE_AVAILABLE
         self._banner       = banner
         self._title        = title
+        self._banner_text  = banner_text
         self._description  = description
+        self._version_text = version_text
         self._colors       = _supports_color() if colors is None else colors
         self._usage        = usage
 
@@ -195,10 +199,13 @@ class InteractiveShell:
 
     def run(self) -> None:
         if self._banner:
-            print(self._c(_render_banner(self._title), _C.BOLD_CYAN))
+            banner_value = self._banner_text if self._banner_text is not None else self._title
+            print(self._c(_render_banner(banner_value), _C.BOLD_CYAN))
 
         print(self._c(self._title,       _C.BOLD_CYAN))
         print(self._c(self._description, _C.DIM))
+        if self._version_text:
+            print(self._c(self._version_text, _C.GREEN))
         print()
         if self._usage:
             print(self._render_full_help())
@@ -333,7 +340,7 @@ class InteractiveShell:
                 logger.debug("Shell '%s' is unavailable for exec builtin.", shell_name, exc_info=True)
                 continue
 
-            self._print_process_output(result)
+            self._print_exec_output(shell_name=shell_name, command=command, result=result)
             if result.returncode != 0:
                 self._error(f"'exec' command exited with status {result.returncode}.")
             return
@@ -345,17 +352,26 @@ class InteractiveShell:
         if last_missing is not None:
             logger.debug("Last exec launcher error: %s", last_missing)
 
-    @staticmethod
-    def _print_process_output(result: Any) -> None:
+    def _print_exec_output(self, *, shell_name: str, command: str, result: Any) -> None:
         stdout = getattr(result, "stdout", "") or ""
         stderr = getattr(result, "stderr", "") or ""
+        returncode = int(getattr(result, "returncode", 0))
+
+        print(self._c("Exec Result", _C.BOLD))
+        print(f"  {self._c('Shell:', _C.CYAN)} {self._c(shell_name, _C.GREEN)}")
+        print(f"  {self._c('Command:', _C.CYAN)} {self._c(command, _C.DIM)}")
+
+        exit_color = _C.BOLD_GREEN if returncode == 0 else _C.BOLD_RED
+        print(f"  {self._c('Exit code:', _C.CYAN)} {self._c(str(returncode), exit_color)}")
 
         if stdout:
-            end = "" if stdout.endswith("\n") else "\n"
-            print(stdout, end=end)
+            print(f"  {self._c('Stdout:', _C.CYAN)}")
+            for line in stdout.rstrip("\n").splitlines():
+                print(f"    {self._c(line, _C.GREEN)}")
         if stderr:
-            end = "" if stderr.endswith("\n") else "\n"
-            print(stderr, end=end, file=sys.stderr)
+            print(f"  {self._c('Stderr:', _C.CYAN)}")
+            for line in stderr.rstrip("\n").splitlines():
+                print(f"    {self._c(line, _C.RED)}")
 
     def _print_command_help(self, target: str) -> None:
         try:
@@ -414,7 +430,7 @@ class InteractiveShell:
             return
 
         if self._print_result and result is not None:
-            print(self._c(str(result), _C.GREEN))
+            self._print_command_result(entry.name, result)
 
     # ------------------------------------------------------------------
     # Rendering helpers
@@ -446,7 +462,7 @@ class InteractiveShell:
             ])
 
         rows = [
-            (entry.name, entry.help_text or entry.description or "—")
+            (entry.name, entry.help_text or entry.description or "-")
             for entry in entries
         ]
         return "\n".join([
@@ -455,7 +471,7 @@ class InteractiveShell:
         ])
 
     def _render_command_help(self, entry: Any) -> str:
-        summary = entry.help_text or entry.description or "—"
+        summary = entry.help_text or entry.description or "-"
         aliases = ", ".join(entry.options) if entry.options else "none"
         usage   = render_command_usage(entry, program_name=self._program_name)
 
@@ -476,7 +492,7 @@ class InteractiveShell:
             qualifier = "required" if arg.required else "optional"
             default   = f", default={arg.default!r}" if arg.default is not MISSING else ""
             key       = f"{arg.name}  {self._c(f'({type_name}, {qualifier}{default})', _C.DIM)}"
-            value     = arg.help_text or "—"
+            value     = arg.help_text or "-"
             arg_rows.append((key, value))
 
         lines += ["", self._section_header("Arguments"), self._render_table(arg_rows)]
@@ -497,6 +513,64 @@ class InteractiveShell:
     def _section_header(self, title: str) -> str:
         return self._c(title, _C.BOLD)
 
+    def _print_command_result(self, command_name: str, result: Any) -> None:
+        text = str(result)
+        if command_name in {"run", "install", "update", "pull"} and text.startswith("FX "):
+            self._print_structured_result(text)
+            return
+        print(self._c(text, _C.GREEN))
+
+    def _print_structured_result(self, text: str) -> None:
+        lines = text.splitlines()
+        if not lines:
+            return
+
+        first = lines[0].strip()
+        if first:
+            print(self._c(first, _C.BOLD_GREEN))
+
+        for raw in lines[1:]:
+            line = raw.strip()
+            if not line:
+                continue
+            if ":" not in line:
+                print(self._c(f"  {line}", _C.GREEN))
+                continue
+
+            key, value = line.split(":", 1)
+            key = key.strip()
+            value = value.strip()
+            value_color = self._result_value_color(key, value)
+            print(
+                f"  {self._c(f'{key}:', _C.CYAN)} {self._c(value, value_color)}"
+            )
+
+    @staticmethod
+    def _result_value_color(key: str, value: str) -> str:
+        key_lower = key.lower()
+        value_lower = value.lower()
+
+        if key_lower == "status":
+            if value_lower in {"success", "ok", "passed"}:
+                return _C.BOLD_GREEN
+            if value_lower in {"failure", "failed", "error"}:
+                return _C.BOLD_RED
+            return _C.YELLOW
+
+        if key_lower == "exit code":
+            return _C.BOLD_GREEN if value.strip() == "0" else _C.BOLD_RED
+
+        if key_lower in {"command"}:
+            return _C.DIM
+
+        if key_lower in {"skipped"}:
+            return _C.YELLOW
+
+        if key_lower in {"stderr", "errors"}:
+            return _C.RED
+
+        return _C.GREEN
+
     # ------------------------------------------------------------------
     # Feedback primitives
     # ------------------------------------------------------------------
@@ -506,7 +580,7 @@ class InteractiveShell:
         print(f"{prefix}  {message}")
 
     def _hint(self, message: str) -> None:
-        print(self._c(f"  → {message}", _C.YELLOW))
+        print(self._c(f"  -> {message}", _C.YELLOW))
 
     # ------------------------------------------------------------------
     # Styling
@@ -515,3 +589,4 @@ class InteractiveShell:
     def _c(self, text: str, code: str) -> str:
         """Apply an ANSI code when colors are enabled; no-op otherwise."""
         return f"{code}{text}{_C.RESET}" if self._colors else text
+

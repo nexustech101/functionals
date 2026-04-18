@@ -6,7 +6,7 @@
 [![Module](https://img.shields.io/badge/module-functionals-green)](#decorates)
 [![CLI](https://img.shields.io/badge/module-functionals.cli-blue)](#decoratescli)
 [![DB](https://img.shields.io/badge/module-functionals.db-darkorange)](#decoratesdb)
-[![Tests](https://img.shields.io/badge/tested-170%2B%20tests-brightgreen)](#testing)
+[![Tests](https://img.shields.io/badge/tested-190%2B%20tests-brightgreen)](#testing)
 
 Decorates is a production-oriented toolkit for two common Python surfaces:
 
@@ -178,8 +178,12 @@ fx health TodoService
 Expected structure:
 
 ```text
-app.py
-plugins/__init__.py
+pyproject.toml
+README.md
+src/todoservice/__main__.py
+src/todoservice/todo.py
+src/todoservice/plugins/__init__.py
+tests/test_todo_cli.py
 .functionals/fx.db
 ```
 
@@ -193,8 +197,13 @@ fx health DataService
 Expected structure:
 
 ```text
-models.py
-plugins/__init__.py
+pyproject.toml
+README.md
+src/dataservice/__main__.py
+src/dataservice/api.py
+src/dataservice/models.py
+src/dataservice/plugins/__init__.py
+tests/test_user_api.py
 .functionals/fx.db
 ```
 
@@ -205,6 +214,30 @@ Notes:
 - `fx init <project_name>` still works and defaults to `cli`.
 - If `root` is omitted, `fx init` uses `<project_name>` as the project directory.
 - `fx health` is the canonical check command (`--doctor` is kept as a compatibility alias).
+
+Additional FX commands:
+
+```bash
+# Show installed fx version
+fx --version
+
+# Run project entrypoint (auto-detected)
+fx run TodoService
+
+# Editable install (active env or project venv)
+fx install TodoService
+fx install TodoService --venv .venv --extras dev
+
+# Update decorates package source
+fx update TodoService                          # source=pypi
+fx update TodoService --source git --repo https://github.com/nexustech101/functionals.git --ref main
+fx update TodoService --source path --path ../framework
+
+# Pull plugins safely from a git repository
+fx pull https://github.com/example/plugins-repo.git TodoService --ref main --subdir plugins
+```
+
+`fx worktree` is currently spec-defined only and planned for a later release after the graph/tree data-structure layer is implemented.
 
 ### Database + FastAPI in 5 minutes
 

@@ -34,6 +34,7 @@ class _C:
     BOLD = "\033[1m"
     DIM = "\033[2m"
     CYAN = "\033[36m"
+    GREEN = "\033[32m"
     BOLD_CYAN = "\033[1;36m"
 
 
@@ -210,6 +211,7 @@ class CommandRegistry:
         program_name: str | None = None,
         shell_title: str = "Functionals CLI",
         shell_description: str = "Type 'help' for shell help and 'exit' to quit.",
+        shell_version: str | None = None,
         colors: bool | None = None,
     ) -> None:
         """Print comprehensive CLI help for all commands or one specific command."""
@@ -220,6 +222,7 @@ class CommandRegistry:
                     program_name=program_name,
                     shell_title=shell_title,
                     shell_description=shell_description,
+                    shell_version=shell_version,
                     use_color=use_color,
                 )
             )
@@ -247,6 +250,7 @@ class CommandRegistry:
         shell_banner_text: str | None = None,
         shell_title: str = "Functionals CLI",
         shell_description: str = "Type 'help' for shell help and 'exit' to quit.",
+        shell_version: str | None = None,
         shell_colors: bool | None = None,
         shell_usage: bool = False,
     ) -> Any:
@@ -265,6 +269,7 @@ class CommandRegistry:
                     banner_text=shell_banner_text,
                     shell_title=shell_title,
                     shell_description=shell_description,
+                    shell_version=shell_version,
                     colors=shell_colors,
                     shell_usage=shell_usage,
                 )
@@ -272,6 +277,7 @@ class CommandRegistry:
                 program_name=program_name,
                 shell_title=shell_title,
                 shell_description=shell_description,
+                shell_version=shell_version,
                 colors=shell_colors,
             )
             return None
@@ -290,6 +296,7 @@ class CommandRegistry:
                 banner_text=shell_banner_text,
                 shell_title=shell_title,
                 shell_description=shell_description,
+                shell_version=shell_version,
                 colors=shell_colors,
                 shell_usage=shell_usage,
             )
@@ -307,6 +314,7 @@ class CommandRegistry:
                         program_name=program_name,
                         shell_title=shell_title,
                         shell_description=shell_description,
+                        shell_version=shell_version,
                         colors=shell_colors,
                     )
                 except UnknownCommandError:
@@ -321,6 +329,7 @@ class CommandRegistry:
                     program_name=program_name,
                     shell_title=shell_title,
                     shell_description=shell_description,
+                    shell_version=shell_version,
                     colors=shell_colors,
                 )
             return None
@@ -366,13 +375,13 @@ class CommandRegistry:
         banner_text: str | None = None,
         shell_title: str = "Functionals CLI",
         shell_description: str = "Type 'help' for shell help and 'exit' to quit.",
+        shell_version: str | None = None,
         colors: bool | None = None,
         shell_usage: bool = False,
     ) -> None:
         """Run this registry in interactive REPL mode."""
         from functionals.cli.shell import InteractiveShell
 
-        title = banner_text if banner_text is not None else shell_title
         shell = InteractiveShell(
             self,
             print_result=print_result,
@@ -380,8 +389,10 @@ class CommandRegistry:
             program_name=program_name,
             input_fn=input_fn,
             banner=banner,
-            title=title,
+            title=shell_title,
+            banner_text=banner_text,
             description=shell_description,
+            version_text=shell_version,
             colors=colors,
             usage=shell_usage,
         )
@@ -584,6 +595,7 @@ class CommandRegistry:
         program_name: str | None = None,
         shell_title: str = "Functionals CLI",
         shell_description: str = "Type 'help' for shell help and 'exit' to quit.",
+        shell_version: str | None = None,
         use_color: bool = False,
     ) -> str:
         _ = program_name or "app.py"
@@ -591,6 +603,10 @@ class CommandRegistry:
         lines += [
             self._c(shell_title, _C.BOLD_CYAN, use_color),
             self._c(shell_description, _C.DIM, use_color),
+        ]
+        if shell_version:
+            lines.append(self._c(shell_version, _C.GREEN, use_color))
+        lines += [
             "",
             self._section_header("Shell builtins", use_color),
             self._render_help_table(

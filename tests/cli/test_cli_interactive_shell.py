@@ -376,6 +376,31 @@ def test_shell_wraps_ansi_prompt_for_readline():
     assert wrapped.endswith("\x01\x1b[0m\x02")
 
 
+def test_interactive_shell_pretty_prints_structured_fx_result(capsys):
+    @cli.register(name="run", description="Run app")
+    def run_fx() -> str:
+        return "\n".join(
+            [
+                "FX Run Result",
+                "Status: success",
+                "Project: /tmp/demo",
+                "Command: python -m demo",
+            ]
+        )
+
+    cli.run_shell(
+        input_fn=_input_from_lines(["run", "quit"]),
+        print_result=True,
+        banner=False,
+        colors=True,
+    )
+
+    out = capsys.readouterr().out
+    assert "FX Run Result" in out
+    assert "Status:" in out
+    assert "\x1b[" in out
+
+
 def test_interactive_mode_supports_exec_builtin(capsys, monkeypatch):
     _register_interactive_commands()
 
@@ -402,6 +427,9 @@ def test_interactive_mode_supports_exec_builtin(capsys, monkeypatch):
     )
 
     out = capsys.readouterr().out
+    assert "Exec Result" in out
+    assert "Shell:" in out
+    assert "Exit code:" in out
     assert "exec-ok" in out
     assert calls
     if os.name == "nt":
@@ -439,6 +467,9 @@ def test_exec_falls_back_to_cmd_when_powershell_missing(capsys, monkeypatch):
     )
 
     out = capsys.readouterr().out
+    assert "Exec Result" in out
+    assert "Shell:" in out
+    assert "Exit code:" in out
     assert "fallback-ok" in out
     assert calls == ["powershell", "cmd"]
 
