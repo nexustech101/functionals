@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 import sys
 from collections.abc import Callable
-from typing import Any, Sequence, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Sequence, get_args, get_origin
 
 from registers.cli.exceptions import CommandExecutionError, DuplicateCommandError, FrameworkError, UnknownCommandError
 from registers.cli.utils.reflection import get_params
@@ -85,6 +85,33 @@ class _StagedOption:
 
 class CommandRegistry:
     """Internal state container for staged decorators and finalized commands."""
+
+    if TYPE_CHECKING:
+        # IDE/type-checker surface for instance-level decorator usage.
+        # Runtime behavior is still provided dynamically via __getattr__.
+        def argument(
+            self,
+            name: str,
+            *,
+            type: Any = str,
+            help: str = "",
+            default: Any = MISSING,
+        ) -> Callable[[Callable[..., Any]], Callable[..., Any]]: ...
+
+        def option(
+            self,
+            flag: str,
+            *,
+            help: str = "",
+        ) -> Callable[[Callable[..., Any]], Callable[..., Any]]: ...
+
+        def register(
+            self,
+            name: str | None = None,
+            *,
+            description: str = "",
+            help: str = "",
+        ) -> Callable[[Callable[..., Any]], Callable[..., Any]]: ...
 
     def __init__(self) -> None:
         self._commands: dict[str, CommandEntry] = {}
