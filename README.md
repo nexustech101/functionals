@@ -1,4 +1,4 @@
-# Functionals
+# Registers
 
 [![PyPI version](https://img.shields.io/pypi/v/registers)](https://pypi.org/project/registers/)
 [![Python versions](https://img.shields.io/pypi/pyversions/registers)](https://pypi.org/project/registers/)
@@ -10,17 +10,17 @@
 [![FX Tool](https://img.shields.io/badge/tool-fx--tool-black)](https://github.com/nexustech101/fx-tool)
 ![Tests](https://img.shields.io/badge/tests-200%2B%20unit%20tests-brightgreen)
 
-Functionals is a DX-first Python framework for building:
+Registers is a DX-first Python framework for building:
 
 - CLI tooling systems
 - Data and API services
 - Scheduled/event automation workflows
 
-It uses decorators for command, model, and job definitions, and pairs with `fx-tool`, the project manager for scaffolding, running, validating, and operating Functionals projects.
+It uses decorators for command, model, and job definitions, and pairs with `fx-tool`, the project manager for scaffolding, running, validating, and operating Registers projects.
 
 This framework is for teams and developers who want one coherent toolkit for backend development and DevOps workflows instead of stitching together many unrelated layers. Build, manage, and deploy at the speed of thought.
 
-## Why Functionals
+## Why Registers
 
 - Fast setup: generate ready-to-run CLI or DB/API projects with `fx init`.
 - Unified patterns: decorators for commands (`cli`), models (`db`), and jobs (`cron`).
@@ -208,8 +208,8 @@ Interactive mode:
 
 ![Screenshot](img1.png)
 
-`fx-tool` is the recommended way to manage Functionals projects end-to-end.
-Think of it as the project operations companion for Functionals, similar to how
+`fx-tool` is the recommended way to manage Registers projects end-to-end.
+Think of it as the project operations companion for Registers, similar to how
 `pip` supports Python package workflows or how `npm` supports Node package workflows.
 For full `fx` usage, see the `fx-tool` docs in the separate repo.
 
@@ -405,7 +405,7 @@ Retry-capable jobs are moved to `dead_letter` state when max attempts are exhaus
   Decorator-driven interval/cron/event jobs with async runtime and deployment artifact generation.
 
 - `fx-tool` (separate package)
-  Project manager and operations CLI for Functionals workflows (scaffolding, runtime ops, cron lifecycle, and workflow orchestration).
+  Project manager and operations CLI for Registers workflows (scaffolding, runtime ops, cron lifecycle, and workflow orchestration).
 
 ## Who This Is For
 
@@ -425,7 +425,7 @@ Retry-capable jobs are moved to `dead_letter` state when max attempts are exhaus
 
 ## Roadmap and Planned Extensions
 
-Functionals is production-ready today and actively expanding into agentic tooling workflows. Planned additions include:
+Registers is production-ready today and actively expanding into agentic tooling workflows. Planned additions include:
 
 - MCP support:
   A decorator-based framework for defining and operating MCP servers.
