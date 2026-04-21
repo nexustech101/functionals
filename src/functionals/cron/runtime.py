@@ -10,12 +10,14 @@ from datetime import datetime
 import inspect
 import json
 from pathlib import Path
+import random
 import signal
 import time
 from typing import Any
 
 from functionals.cron.decorators import get_registry
 from functionals.cron.discovery import load_project_jobs
+from functionals.cron.registry import CronRegistry
 from functionals.cron.state import (
     CronEventRecord,
     create_event,
@@ -40,10 +42,31 @@ class RuntimeSummary:
     webhook_enabled: bool
 
 
-def sync_project_jobs(root: str | Path = ".") -> tuple[str | None, int, int]:
+@dataclass(frozen=True)
+class RetryConfig:
+    policy: str
+    max_attempts: int
+    backoff_seconds: float
+    max_backoff_seconds: float
+    jitter_seconds: float
+
+
+_RETRY_META_KEY = "__fx_retry"
+
+
+def sync_project_jobs(
+    root: str | Path = ".",
+    *,
+    registry: CronRegistry | None = None,
+) -> tuple[str | None, int, int]:
     root_path = resolve_root(root)
-    package, loaded_modules = load_project_jobs(root_path, clear_registry=True)
-    entries = list(get_registry().all().values())
+    active_registry = get_registry() if registry is None else registry
+    package, loaded_modules = load_project_jobs(
+        root_path,
+        clear_registry=True,
+        registry=active_registry,
+    )
+    entries = list(active_registry.all().values())
     sync_registry_to_state(root_path, entries)
     return package, loaded_modules, len(entries)
 
@@ -91,12 +114,14 @@ class CronRuntimeEngine:
         poll_interval: float = 1.0,
         webhook_host: str = "127.0.0.1",
         webhook_port: int = 8787,
+        registry: CronRegistry | None = None,
     ) -> None:
         self.root = resolve_root(root)
         self.workers = max(1, int(workers))
         self.poll_interval = max(0.2, float(poll_interval))
         self.webhook_host = webhook_host
         self.webhook_port = int(webhook_port)
+        self._registry = get_registry() if registry is None else registry
 
         self._queue: asyncio.Queue[CronEventRecord] = asyncio.Queue()
         self._stop = asyncio.Event()
@@ -108,10 +133,86 @@ class CronRuntimeEngine:
         self._server: asyncio.AbstractServer | None = None
 
     def _jobs(self) -> dict[str, Any]:
-        return get_registry().all()
+        return self._registry.all()
+
+    @staticmethod
+    def _retry_config(entry: Any) -> RetryConfig:
+        return RetryConfig(
+            policy=str(getattr(entry, "retry_policy", "none") or "none").strip().lower(),
+            max_attempts=max(0, int(getattr(entry, "retry_max_attempts", 0) or 0)),
+            backoff_seconds=max(0.0, float(getattr(entry, "retry_backoff_seconds", 0.0) or 0.0)),
+            max_backoff_seconds=max(0.0, float(getattr(entry, "retry_max_backoff_seconds", 0.0) or 0.0)),
+            jitter_seconds=max(0.0, float(getattr(entry, "retry_jitter_seconds", 0.0) or 0.0)),
+        )
+
+    @staticmethod
+    def _strip_retry_meta(payload: Any) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            if payload is None:
+                return {}
+            return {"value": payload}
+        clean = dict(payload)
+        clean.pop(_RETRY_META_KEY, None)
+        return clean
+
+    @staticmethod
+    def _retry_attempt(payload: Any) -> int:
+        if not isinstance(payload, dict):
+            return 1
+        raw = payload.get(_RETRY_META_KEY, {})
+        if not isinstance(raw, dict):
+            return 1
+        try:
+            attempt = int(raw.get("attempt", 1))
+        except (TypeError, ValueError):
+            return 1
+        return max(1, attempt)
+
+    @staticmethod
+    def _retry_event_ready(payload: Any) -> bool:
+        if not isinstance(payload, dict):
+            return True
+        raw = payload.get(_RETRY_META_KEY, {})
+        if not isinstance(raw, dict):
+            return True
+        try:
+            not_before = float(raw.get("not_before_epoch", 0.0))
+        except (TypeError, ValueError):
+            return True
+        return time.time() >= max(0.0, not_before)
+
+    @staticmethod
+    def _retry_delay(config: RetryConfig, attempt: int) -> float:
+        if config.policy == "none" or config.max_attempts <= 0:
+            return 0.0
+        if config.policy == "fixed":
+            delay = config.backoff_seconds
+        else:
+            delay = config.backoff_seconds * (2 ** max(0, attempt - 1))
+        if config.max_backoff_seconds > 0:
+            delay = min(delay, config.max_backoff_seconds)
+        if config.jitter_seconds > 0:
+            delay += random.uniform(0.0, config.jitter_seconds)
+        return max(0.0, delay)
+
+    @staticmethod
+    def _build_retry_payload(
+        payload: dict[str, Any],
+        *,
+        attempt: int,
+        max_attempts: int,
+        not_before_epoch: float,
+    ) -> dict[str, Any]:
+        next_payload = dict(payload)
+        next_payload[_RETRY_META_KEY] = {
+            "attempt": max(1, int(attempt)),
+            "max_attempts": max(1, int(max_attempts)),
+            "not_before_epoch": max(0.0, float(not_before_epoch)),
+        }
+        return next_payload
 
     async def run_forever(self) -> RuntimeSummary:
-        sync_project_jobs(self.root)
+        sync_project_jobs(self.root, registry=self._registry)
         jobs = self._jobs()
         upsert_runtime(
             root=self.root,
@@ -221,6 +322,9 @@ class CronRuntimeEngine:
                 limit=100,
             )
             for item in pending:
+                payload = parse_json(item.payload, {})
+                if not self._retry_event_ready(payload):
+                    continue
                 queued = mark_event(item, status="queued")
                 await self._queue.put(queued)
             await asyncio.sleep(self.poll_interval)
@@ -399,7 +503,10 @@ class CronRuntimeEngine:
         self._running_jobs.add(entry.name)
         started_at = utc_now()
         begin = time.perf_counter()
-        payload = parse_json(event.payload, {})
+        raw_payload = parse_json(event.payload, {})
+        payload = self._strip_retry_meta(raw_payload)
+        attempt = self._retry_attempt(raw_payload)
+        retry = self._retry_config(entry)
 
         try:
             kwargs = {}
@@ -437,32 +544,100 @@ class CronRuntimeEngine:
             )
         except TimeoutError:
             duration = int((time.perf_counter() - begin) * 1000)
-            mark_event(event, status="failed", error="Job execution timed out.")
-            record_run(
-                root=self.root,
-                job_name=entry.name,
-                event_id=event.id,
-                status="failure",
-                message="timed out",
+            await self._handle_execution_failure(
+                event=event,
+                entry=entry,
+                payload=payload,
+                attempt=attempt,
+                retry=retry,
                 started_at=started_at,
-                finished_at=utc_now(),
                 duration_ms=duration,
+                error_message="Job execution timed out.",
             )
         except Exception as exc:
             duration = int((time.perf_counter() - begin) * 1000)
-            mark_event(event, status="failed", error=str(exc))
+            await self._handle_execution_failure(
+                event=event,
+                entry=entry,
+                payload=payload,
+                attempt=attempt,
+                retry=retry,
+                started_at=started_at,
+                duration_ms=duration,
+                error_message=str(exc),
+            )
+        finally:
+            self._running_jobs.discard(entry.name)
+
+    async def _handle_execution_failure(
+        self,
+        *,
+        event: CronEventRecord,
+        entry: Any,
+        payload: dict[str, Any],
+        attempt: int,
+        retry: RetryConfig,
+        started_at: str,
+        duration_ms: int,
+        error_message: str,
+    ) -> None:
+        can_retry = (
+            retry.policy != "none"
+            and retry.max_attempts > 0
+            and attempt < retry.max_attempts
+        )
+        if can_retry:
+            next_attempt = attempt + 1
+            delay = self._retry_delay(retry, attempt)
+            retry_event = create_event(
+                root=self.root,
+                job_name=entry.name,
+                source="retry",
+                payload=self._build_retry_payload(
+                    payload,
+                    attempt=next_attempt,
+                    max_attempts=retry.max_attempts,
+                    not_before_epoch=time.time() + delay,
+                ),
+                status="pending",
+            )
+            reason = (
+                f"{error_message} (retry {next_attempt}/{retry.max_attempts} "
+                f"scheduled in {delay:.2f}s as event {retry_event.id})"
+            )
+            mark_event(event, status="failed", error=reason)
             record_run(
                 root=self.root,
                 job_name=entry.name,
                 event_id=event.id,
                 status="failure",
-                message=str(exc),
+                message=reason,
                 started_at=started_at,
                 finished_at=utc_now(),
-                duration_ms=duration,
+                duration_ms=duration_ms,
             )
-        finally:
-            self._running_jobs.discard(entry.name)
+            return
+
+        final_status = "dead_letter" if retry.policy != "none" and retry.max_attempts > 0 else "failed"
+        if final_status == "dead_letter":
+            reason = (
+                f"{error_message} (dead-lettered after attempt "
+                f"{attempt}/{retry.max_attempts})"
+            )
+        else:
+            reason = error_message
+
+        mark_event(event, status=final_status, error=reason)
+        record_run(
+            root=self.root,
+            job_name=entry.name,
+            event_id=event.id,
+            status="failure",
+            message=reason,
+            started_at=started_at,
+            finished_at=utc_now(),
+            duration_ms=duration_ms,
+        )
 
 
 async def run_daemon(
@@ -472,6 +647,7 @@ async def run_daemon(
     poll_interval: float = 1.0,
     webhook_host: str = "127.0.0.1",
     webhook_port: int = 8787,
+    registry: CronRegistry | None = None,
 ) -> RuntimeSummary:
     engine = CronRuntimeEngine(
         root=root,
@@ -479,6 +655,7 @@ async def run_daemon(
         poll_interval=poll_interval,
         webhook_host=webhook_host,
         webhook_port=webhook_port,
+        registry=registry,
     )
     return await engine.run_forever()
 

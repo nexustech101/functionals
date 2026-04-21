@@ -24,6 +24,7 @@ import logging
 import pkgutil
 from types import ModuleType
 
+from functionals.cli.decorators import use_registry
 from functionals.cli.exceptions import PluginLoadError
 from functionals.cli.registry import CommandRegistry
 
@@ -49,7 +50,8 @@ def load_plugins(package_path: str, registry: CommandRegistry) -> list[ModuleTyp
         PluginLoadError: If the package itself cannot be imported.
     """
     try:
-        package = importlib.import_module(package_path)
+        with use_registry(registry):
+            package = importlib.import_module(package_path)
     except ImportError as exc:
         raise PluginLoadError(package_path, str(exc)) from exc
 
@@ -65,7 +67,8 @@ def load_plugins(package_path: str, registry: CommandRegistry) -> list[ModuleTyp
 
         full_name = f"{package_path}.{module_name}"
         try:
-            module = importlib.import_module(full_name)
+            with use_registry(registry):
+                module = importlib.import_module(full_name)
             loaded.append(module)
             logger.debug("Loaded plugin: %s", full_name)
         except Exception as exc:

@@ -112,6 +112,11 @@ def _render_local(job: CronJobRecord) -> str:
             f"trigger_kind = \"{job.trigger_kind}\"",
             f"enabled = {str(job.enabled).lower()}",
             f"max_runtime = {job.max_runtime}",
+            f"retry_policy = \"{job.retry_policy}\"",
+            f"retry_max_attempts = {job.retry_max_attempts}",
+            f"retry_backoff_seconds = {job.retry_backoff_seconds}",
+            f"retry_max_backoff_seconds = {job.retry_max_backoff_seconds}",
+            f"retry_jitter_seconds = {job.retry_jitter_seconds}",
         ]
     ) + "\n"
 

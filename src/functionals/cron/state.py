@@ -55,6 +55,10 @@ class CronJobRecord(BaseModel):
     tags: str = "[]"
     overlap_policy: str = "skip"
     retry_policy: str = "none"
+    retry_max_attempts: int = 0
+    retry_backoff_seconds: float = 0.0
+    retry_max_backoff_seconds: float = 0.0
+    retry_jitter_seconds: float = 0.0
     handler_module: str
     handler_qualname: str
     created_at: str
@@ -340,6 +344,10 @@ def sync_registry_to_state(root: str | Path | None, entries: list[Any]) -> list[
             tags=json.dumps(list(entry.tags)),
             overlap_policy=entry.overlap_policy,
             retry_policy=entry.retry_policy,
+            retry_max_attempts=getattr(entry, "retry_max_attempts", 0),
+            retry_backoff_seconds=getattr(entry, "retry_backoff_seconds", 0.0),
+            retry_max_backoff_seconds=getattr(entry, "retry_max_backoff_seconds", 0.0),
+            retry_jitter_seconds=getattr(entry, "retry_jitter_seconds", 0.0),
             handler_module=entry.handler_module,
             handler_qualname=entry.handler_qualname,
             created_at=created_at,

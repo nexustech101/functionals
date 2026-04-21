@@ -16,6 +16,7 @@ VALID_TARGETS = {
     "windows_task_scheduler",
     "github_actions",
 }
+VALID_RETRY_POLICIES = {"none", "fixed", "exponential"}
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,10 @@ class JobEntry:
     tags: tuple[str, ...]
     overlap_policy: str = "skip"
     retry_policy: str = "none"
+    retry_max_attempts: int = 0
+    retry_backoff_seconds: float = 0.0
+    retry_max_backoff_seconds: float = 0.0
+    retry_jitter_seconds: float = 0.0
 
 
 class CronRegistry:
@@ -59,6 +64,10 @@ class CronRegistry:
         tags: tuple[str, ...] | list[str] | None = None,
         overlap_policy: str = "skip",
         retry_policy: str = "none",
+        retry_max_attempts: int = 0,
+        retry_backoff_seconds: float = 0.0,
+        retry_max_backoff_seconds: float = 0.0,
+        retry_jitter_seconds: float = 0.0,
     ) -> JobEntry:
         if not callable(fn):
             raise TypeError("job() can only decorate callable functions.")
@@ -83,8 +92,30 @@ class CronRegistry:
             raise ValueError("overlap_policy currently supports only 'skip'.")
 
         normalized_retry = (retry_policy or "none").strip().lower()
-        if normalized_retry != "none":
-            raise ValueError("retry_policy currently supports only 'none'.")
+        if normalized_retry not in VALID_RETRY_POLICIES:
+            raise ValueError(
+                "retry_policy must be one of: "
+                + ", ".join(sorted(VALID_RETRY_POLICIES))
+            )
+        normalized_retry_attempts = int(retry_max_attempts)
+        if normalized_retry_attempts < 0:
+            raise ValueError("retry_max_attempts must be >= 0.")
+        if normalized_retry == "none":
+            normalized_retry_attempts = 0
+        elif normalized_retry_attempts == 0:
+            normalized_retry_attempts = 3
+
+        normalized_backoff = float(retry_backoff_seconds)
+        normalized_backoff_max = float(retry_max_backoff_seconds)
+        normalized_jitter = float(retry_jitter_seconds)
+        if normalized_backoff < 0:
+            raise ValueError("retry_backoff_seconds must be >= 0.")
+        if normalized_backoff_max < 0:
+            raise ValueError("retry_max_backoff_seconds must be >= 0.")
+        if normalized_backoff_max > 0 and normalized_backoff > normalized_backoff_max:
+            raise ValueError("retry_max_backoff_seconds must be >= retry_backoff_seconds.")
+        if normalized_jitter < 0:
+            raise ValueError("retry_jitter_seconds must be >= 0.")
 
         module = getattr(fn, "__module__", "") or ""
         qualname = getattr(fn, "__qualname__", "") or fn.__name__
@@ -106,14 +137,70 @@ class CronRegistry:
             tags=tag_values,
             overlap_policy=normalized_overlap,
             retry_policy=normalized_retry,
+            retry_max_attempts=normalized_retry_attempts,
+            retry_backoff_seconds=normalized_backoff,
+            retry_max_backoff_seconds=normalized_backoff_max,
+            retry_jitter_seconds=normalized_jitter,
         )
         self._jobs[entry.name] = entry
         return entry
+    
+    # Backwards compatible with older architecture of this framework;
+    # Developers can instantiate a Registry object and use `@cron.job(...)` decorators 
+    # or import decorators directly.
+    def job(
+        self,
+        name: str | None = None,
+        *,
+        trigger: TriggerSpec,
+        target: str = "local_async",
+        deployment_file: str = "",
+        enabled: bool = True,
+        max_runtime: int = 0,
+        tags: tuple[str, ...] | list[str] | None = None,
+        overlap_policy: str = "skip",
+        retry_policy: str = "none",
+        retry_max_attempts: int = 0,
+        retry_backoff_seconds: float = 0.0,
+        retry_max_backoff_seconds: float = 0.0,
+        retry_jitter_seconds: float = 0.0,
+    ):
+        """Register a decorated callable as a cron job."""
+
+        def decorator(fn: Any) -> Any:
+            self.register(
+                fn,
+                name=name,
+                trigger=trigger,
+                target=target,
+                deployment_file=deployment_file,
+                enabled=enabled,
+                max_runtime=max_runtime,
+                tags=tags,
+                overlap_policy=overlap_policy,
+                retry_policy=retry_policy,
+                retry_max_attempts=retry_max_attempts,
+                retry_backoff_seconds=retry_backoff_seconds,
+                retry_max_backoff_seconds=retry_max_backoff_seconds,
+                retry_jitter_seconds=retry_jitter_seconds,
+            )
+            return fn
+        return decorator
 
     def get(self, name: str) -> JobEntry:
         if name not in self._jobs:
             raise KeyError(f"No cron job registered as '{name}'.")
         return self._jobs[name]
+    
+    # Alias for returning an intance of this registry, for compatibility with module-level accessors
+    def get_registry(self) -> CronRegistry:
+        """Return the registry instance (for compatibility with module-level accessors)."""
+        return self
+    
+    # Alias for clearing the registry, for compatibility with module-level accessors
+    def reset_registry(self) -> None:
+        """Clear all registered jobs from the registry (for compatibility with module-level accessors)."""
+        self.clear()
 
     def all(self) -> dict[str, JobEntry]:
         return dict(self._jobs)
@@ -123,6 +210,44 @@ class CronRegistry:
 
     def __len__(self) -> int:
         return len(self._jobs)
+
+    def merge_from(self, other: CronRegistry) -> int:
+        """
+        Merge job entries from another registry.
+
+        Returns the number of newly added jobs. Raises ValueError when a job
+        name exists in both registries with different metadata.
+        """
+        if other is self:
+            return 0
+
+        added = 0
+        for name, entry in other.all().items():
+            existing = self._jobs.get(name)
+            if existing is None:
+                self._jobs[name] = entry
+                added += 1
+                continue
+            if existing != entry:
+                raise ValueError(
+                    f"Conflicting cron job '{name}' detected while merging registries."
+                )
+        return added
+
+    @staticmethod
+    def interval(*, seconds: int = 0, minutes: int = 0, hours: int = 0) -> TriggerSpec:
+        """Instance-compatible helper for ``interval(...)`` trigger creation."""
+        return interval(seconds=seconds, minutes=minutes, hours=hours)
+
+    @staticmethod
+    def cron(expression: str, *, timezone: str = "local") -> TriggerSpec:
+        """Instance-compatible helper for ``cron(...)`` trigger creation."""
+        return cron(expression, timezone=timezone)
+
+    @staticmethod
+    def event(kind: str, /, **config: Any) -> TriggerSpec:
+        """Instance-compatible helper for ``event(...)`` trigger creation."""
+        return event(kind, **config)
 
 
 def interval(*, seconds: int = 0, minutes: int = 0, hours: int = 0) -> TriggerSpec:

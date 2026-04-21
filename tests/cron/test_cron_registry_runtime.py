@@ -71,3 +71,44 @@ def test_event_validation_and_cron_matching() -> None:
     now = datetime(2026, 1, 1, 2, 0)
     assert cron_matches("0 2 * * *", now) is True
     assert cron_matches("5 2 * * *", now) is False
+
+
+def test_retry_configuration_persists_to_state(tmp_path: Path) -> None:
+    src = tmp_path / "src" / "app"
+    src.mkdir(parents=True)
+    (src / "__init__.py").write_text("", encoding="utf-8")
+    (src / "jobs.py").write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "import functionals.cron as cron",
+                "@cron.job(",
+                "    name='deploy-prod',",
+                "    trigger=cron.event('manual'),",
+                "    target='local_async',",
+                "    retry_policy='exponential',",
+                "    retry_max_attempts=5,",
+                "    retry_backoff_seconds=10,",
+                "    retry_max_backoff_seconds=120,",
+                "    retry_jitter_seconds=2,",
+                ")",
+                "def deploy_prod() -> str:",
+                "    return 'ok'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    package, loaded, jobs = sync_project_jobs(tmp_path)
+    assert package == "app"
+    assert loaded >= 2
+    assert jobs == 1
+
+    rows = cron_job_registry(tmp_path).filter(project_root=str(tmp_path), order_by="name")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.retry_policy == "exponential"
+    assert row.retry_max_attempts == 5
+    assert row.retry_backoff_seconds == 10
+    assert row.retry_max_backoff_seconds == 120
+    assert row.retry_jitter_seconds == 2

@@ -13,6 +13,18 @@ Public, ergonomic entrypoints are module-level decorators and helpers:
 
     if __name__ == "__main__":
         cli.run()
+
+Instance-mode is also supported for isolated command scopes:
+
+    registry = cli.CommandRegistry()
+
+    @registry.register(description="Say hello")
+    @registry.argument("name")
+    def hello(name: str) -> str:
+        return f"Hello, {name}!"
+
+    if __name__ == "__main__":
+        registry.run()
 """
 
 from functionals.cli.container import DIContainer

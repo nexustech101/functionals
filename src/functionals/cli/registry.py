@@ -92,9 +92,87 @@ class CommandRegistry:
         self._pending_args: dict[Callable[..., Any], list[_StagedArgument]] = {}
         self._pending_options: dict[Callable[..., Any], list[_StagedOption]] = {}
 
+    def __getattr__(self, name: str) -> Any:
+        """
+        Backward-compatible instance facade for decorator-first registration.
+
+        Notes:
+        - We intentionally expose these on *instances* only so legacy checks
+          like ``hasattr(CommandRegistry, "register")`` keep their behavior.
+        - Usage:
+              registry = CommandRegistry()
+              @registry.register(...)
+              @registry.argument(...)
+              @registry.option(...)
+              def command(...): ...
+        """
+        if name == "argument":
+            return self._decorator_argument
+        if name == "option":
+            return self._decorator_option
+        if name == "register":
+            return self._decorator_register
+        raise AttributeError(f"{type(self).__name__!s} object has no attribute {name!r}")
+
     # ------------------------------------------------------------------
     # Decorator staging + finalization
     # ------------------------------------------------------------------
+
+    def _decorator_argument(
+        self,
+        name: str,
+        *,
+        type: Any = str,
+        help: str = "",
+        default: Any = MISSING,
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Instance-level decorator alias for ``stage_argument(...)``."""
+
+        def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+            self.stage_argument(
+                fn,
+                name,
+                arg_type=type,
+                help_text=help,
+                default=default,
+            )
+            return fn
+
+        return decorator
+
+    def _decorator_option(
+        self,
+        flag: str,
+        *,
+        help: str = "",
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Instance-level decorator alias for ``stage_option(...)``."""
+
+        def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+            self.stage_option(fn, flag, help_text=help)
+            return fn
+
+        return decorator
+
+    def _decorator_register(
+        self,
+        name: str | None = None,
+        *,
+        description: str = "",
+        help: str = "",
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Instance-level decorator alias for ``finalize_command(...)``."""
+
+        def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+            self.finalize_command(
+                fn,
+                name=name,
+                description=description,
+                help_text=help,
+            )
+            return fn
+
+        return decorator
 
     def stage_argument(
         self,
@@ -404,6 +482,36 @@ class CommandRegistry:
         self._aliases.clear()
         self._pending_args.clear()
         self._pending_options.clear()
+
+    def get_registry(self) -> CommandRegistry:
+        """Return this registry instance (instance-mode compatibility helper)."""
+        return self
+
+    def reset_registry(self) -> None:
+        """Clear this registry (instance-mode compatibility helper)."""
+        self.clear()
+
+    def load_plugins(self, package_path: str) -> list[Any]:
+        """Load plugin modules into this registry instance."""
+        from functionals.cli.plugins import load_plugins
+
+        return load_plugins(package_path, self)
+
+    def dispatch(
+        self,
+        command: str,
+        cli_args: dict[str, Any],
+        *,
+        container: Any | None = None,
+        middleware: Any | None = None,
+    ) -> Any:
+        """Dispatch one command using explicit DI/middleware against this registry."""
+        from functionals.cli.container import DIContainer
+        from functionals.cli.dispatcher import Dispatcher
+
+        resolved_container = container if container is not None else DIContainer()
+        dispatcher = Dispatcher(self, resolved_container, middleware)
+        return dispatcher.dispatch(command, cli_args)
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -23,6 +23,10 @@ def job(
     tags: tuple[str, ...] | list[str] | None = None,
     overlap_policy: str = "skip",
     retry_policy: str = "none",
+    retry_max_attempts: int = 0,
+    retry_backoff_seconds: float = 0.0,
+    retry_max_backoff_seconds: float = 0.0,
+    retry_jitter_seconds: float = 0.0,
 ):
     """Register a decorated callable as a cron job."""
 
@@ -38,9 +42,12 @@ def job(
             tags=tags,
             overlap_policy=overlap_policy,
             retry_policy=retry_policy,
+            retry_max_attempts=retry_max_attempts,
+            retry_backoff_seconds=retry_backoff_seconds,
+            retry_max_backoff_seconds=retry_max_backoff_seconds,
+            retry_jitter_seconds=retry_jitter_seconds,
         )
         return fn
-
     return decorator
 
 

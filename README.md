@@ -7,7 +7,7 @@
 [![CLI](https://img.shields.io/badge/module-functionals.cli-blue)](#architecture)
 [![DB](https://img.shields.io/badge/module-functionals.db-darkorange)](#architecture)
 [![Cron](https://img.shields.io/badge/module-functionals.cron-purple)](#architecture)
-[![FX](https://img.shields.io/badge/module-functionals.fx-black)](#quick-start-with-fx)
+[![FX Tool](https://img.shields.io/badge/tool-fx--tool-black)](https://github.com/nexustech101/fx-tool)
 ![Tests](https://img.shields.io/badge/tests-200%2B%20unit%20tests-brightgreen)
 
 Functionals is a DX-first Python framework for building:
@@ -16,7 +16,7 @@ Functionals is a DX-first Python framework for building:
 - Data and API services
 - Scheduled/event automation workflows
 
-It uses decorators for command, model, and job definitions, and ships with `fx`, a built-in project manager for scaffolding, running, validating, and operating projects.
+It uses decorators for command, model, and job definitions, and pairs with `fx-tool`, the project manager for scaffolding, running, validating, and operating Functionals projects.
 
 This framework is for teams and developers who want one coherent toolkit for backend development and DevOps workflows instead of stitching together many unrelated layers. Build, manage, and deploy at the speed of thought.
 
@@ -24,7 +24,7 @@ This framework is for teams and developers who want one coherent toolkit for bac
 
 - Fast setup: generate ready-to-run CLI or DB/API projects with `fx init`.
 - Unified patterns: decorators for commands (`cli`), models (`db`), and jobs (`cron`).
-- Operational workflow built in: run, install, update, pull plugins, and manage cron from `fx`.
+- Operational workflow support via `fx-tool`: run, install, update, pull plugins, and manage cron runtime.
 - Plugin architecture: organize command suites into modules and load them cleanly.
 - Production-minded behavior: structured state, health checks, operation history, and test coverage.
 - Projects that use `functionals.cli` module come with a built-in interactive shell.
@@ -33,6 +33,20 @@ This framework is for teams and developers who want one coherent toolkit for bac
 
 ```bash
 pip install decorates  # Package name is `decorates`; module name is `functionals`
+```
+
+Install the project manager (`fx-tool`) as a companion:
+
+```bash
+pip install fx-tool
+# or from source
+pip install git+https://github.com/nexustech101/fx.git
+```
+
+You can also clone directly from the repo `nexustech101/fx`:
+
+```bash
+git clone https://github.com/nexustech101/fx.git
 ```
 
 ## Quick Start Guide
@@ -138,6 +152,27 @@ if __name__ == "__main__":
     )
 ```
 
+`functionals.cli` also supports explicit instance-mode registries for isolated
+command scopes:
+
+```python
+import functionals.cli as cli
+
+
+registry = cli.CommandRegistry()
+
+
+@registry.register(description="Say hello")
+@registry.argument("name", type=str)
+@registry.option("--hello")
+def hello(name: str) -> str:
+    return f"Hello, {name}!"
+
+
+if __name__ == "__main__":
+    registry.run()
+```
+
 Run it as follows:
 
 ```bash
@@ -173,93 +208,10 @@ Interactive mode:
 
 ![Screenshot](img1.png)
 
-### `functionals.fx` in minutes (project-type init + health)
-
-`functionals.fx` is the project tooling layer built on top of the CLI + DB modules.
-After local install (`pip install -e .`), you can run:
-
-```bash
-fx --help
-```
-
-Create a CLI-first project structure:
-
-```bash
-fx init cli TodoService
-fx health TodoService
-```
-
-Expected structure:
-
-```text
-pyproject.toml
-README.md
-src/app/__main__.py
-src/app/todo.py
-src/app/plugins/__init__.py
-tests/test_todo_cli.py
-.fx/fx.db
-```
-
-Create a DB-first project structure:
-
-```bash
-fx init db DataService
-fx health DataService
-```
-
-Expected structure:
-
-```text
-pyproject.toml
-README.md
-src/app/__main__.py
-src/app/api.py
-src/app/models.py
-src/app/plugins/__init__.py
-tests/test_user_api.py
-.fx/fx.db
-```
-
-![Screenshot](img2.png)
-![Screenshot](img3.png)
-
-Notes:
-- `fx init <project_name>` still works and defaults to `cli`.
-- If `root` is omitted, `fx init` uses `<project_name>` as the project directory.
-- `fx health` is the canonical check command (`--doctor` is kept as a compatibility alias).
-
-Additional FX commands:
-
-```bash
-# Show installed fx version
-fx --version
-
-# Run project entrypoint (auto-detected)
-fx run TodoService
-
-# Editable install (active env or project venv)
-fx install TodoService
-fx install TodoService --venv .venv --extras dev
-
-# Update decorates package source
-fx update TodoService                          # source=pypi
-fx update TodoService --source git --repo https://github.com/nexustech101/functionals.git --ref main
-fx update TodoService --source path --path ../framework
-
-# Pull plugins safely from a git repository
-fx pull https://github.com/example/plugins-repo.git TodoService --ref main --subdir plugins
-
-# Manage cron runtime and jobs
-fx cron start TodoService
-fx cron jobs TodoService
-fx cron trigger nightly-build TodoService
-fx cron generate TodoService
-fx cron apply TodoService
-fx cron stop TodoService
-```
-
-`fx worktree` is currently spec-defined only and planned for a later release after the graph/tree data-structure layer is implemented.
+`fx-tool` is the recommended way to manage Functionals projects end-to-end.
+Think of it as the project operations companion for Functionals, similar to how
+`pip` supports Python package workflows or how `npm` supports Node package workflows.
+For full `fx` usage, see the `fx-tool` docs in the separate repo.
 
 ### Database + FastAPI in 5 minutes
 
@@ -397,31 +349,54 @@ curl "http://localhost:8000/orders/desc?limit=20&offset=0"
 
 ## Cron + Workflow Operations
 
-Use `functionals.cron` decorators to define interval/cron/event jobs and manage runtime through `fx`.
+Use `functionals.cron` decorators to define interval/cron/event jobs.
+For runtime lifecycle and workflow operations (`start`, `status`, `generate`,
+`apply`, `register`, `run-workflow`), use `fx-tool`.
 
-```bash
-fx cron start .
-fx cron status .
-fx cron jobs .
-fx cron trigger <job_name> .
-fx cron generate .
-fx cron apply .
-fx cron stop .
+Both cron registration styles are supported:
+
+```python
+# Module-level style
+import functionals.cron as cron
+
+@cron.job(
+    name="nightly",
+    trigger=cron.cron("0 2 * * *"),
+    target="local_async",
+    retry_policy="exponential",
+    retry_max_attempts=5,
+    retry_backoff_seconds=10,
+    retry_max_backoff_seconds=180,
+    retry_jitter_seconds=2,
+)
+def nightly() -> str:
+    return "ok"
 ```
 
-For centralized DevOps workflow organization:
+```python
+# Explicit instance style
+from functionals.cron import CronRegistry
 
-```bash
-fx cron workspace .
-fx cron register deploy-workflow . --workflow-file ops/workflows/ci/deploy-workflow.yml --job nightly-build --target github_actions
-fx cron workflows .
-fx cron run-workflow deploy-workflow . --payload '{"env":"prod"}'
+cron = CronRegistry()
+
+@cron.job(
+    name="nightly",
+    trigger=cron.cron("0 2 * * *"),
+    target="local_async",
+    retry_policy="fixed",
+    retry_max_attempts=3,
+    retry_backoff_seconds=15,
+)
+def nightly() -> str:
+    return "ok"
 ```
+
+Retry-capable jobs are moved to `dead_letter` state when max attempts are exhausted.
 
 ## Architecture
 
 - `functionals.cli`
-  Decorator-driven command registration, parser/dispatch, interactive shell, and plugin loading.
+  Decorator-driven command registration (module facade + explicit registry instances), parser/dispatch, interactive shell, and plugin loading.
 
 - `functionals.db`
   Decorator-driven persistence for Pydantic models with SQLAlchemy-backed storage and model manager patterns.
@@ -429,8 +404,8 @@ fx cron run-workflow deploy-workflow . --payload '{"env":"prod"}'
 - `functionals.cron`
   Decorator-driven interval/cron/event jobs with async runtime and deployment artifact generation.
 
-- `functionals.fx`
-  Built-in operations layer for project structuring, environment lifecycle, plugin workflows, cron operations, health checks, and history.
+- `fx-tool` (separate package)
+  Project manager and operations CLI for Functionals workflows (scaffolding, runtime ops, cron lifecycle, and workflow orchestration).
 
 ## Who This Is For
 
@@ -438,13 +413,14 @@ fx cron run-workflow deploy-workflow . --payload '{"env":"prod"}'
 - Platform and DevOps engineers standardizing automation workflows.
 - Teams building plugin-based command ecosystems for shared operations.
 - AI tooling teams that need a clear path from local workflows to managed automation.
+- Any engineer who needs a fast and robust solution to data intensive applications.
 
 ## Documentation
 
 - Project architecture spec: `PROJECT_SPEC.md`
 - CLI manual: `src/functionals/cli/USAGE.md`
 - DB manual: `src/functionals/db/USAGE.md`
-- FX manual: `src/functionals/fx/USAGE.md`
+- FX tool docs (separate package): `https://github.com/nexustech101/fx-tool`
 - Cron manual: `src/functionals/cron/USAGE.md` (if present in your version)
 
 ## Roadmap and Planned Extensions
@@ -463,14 +439,7 @@ Functionals is production-ready today and actively expanding into agentic toolin
 - LLM tooling decorators:
   Decorator-driven tool definitions and memory/knowledge wiring for agent workflows.
 
-These additions are designed to work with the current `fx + cli + db + cron` architecture rather than replace it.
-
-## Documentation
-
-- DB guide: `src/functionals/db/USAGE.md`
-- FX guide: `src/functionals/fx/USAGE.md`
-- CLI source API: `src/functionals/cli`
-- DB source API: `src/functionals/db`
+These additions are designed to work with the current `fx-tool + cli + db + cron` architecture rather than replace it.
 
 ## Requirements
 
@@ -482,23 +451,7 @@ These additions are designed to work with the current `fx + cli + db + cron` arc
 
 - The default `pytest` suite includes SQLite coverage along with PostgreSQL/MySQL integration tests for rename-state behavior.
 - Run Docker Desktop, or another compatible Docker engine, before executing the backend integration suite so the services in `docker-compose.test-db.yml` can boot successfully.
-- The package is backed by a rigorous, production-focused test suite (170+ tests) covering unit behavior, edge cases, and multi-dialect integration scenarios.
-
-
-## License
-
-MIT
-ite includes SQLite coverage along with PostgreSQL/MySQL integration tests for rename-state behavior.
-- Run Docker Desktop, or another compatible Docker engine, before executing the backend integration suite so the services in `docker-compose.test-db.yml` can boot successfully.
-- The package is backed by a rigorous, production-focused test suite (170+ tests) covering unit behavior, edge cases, and multi-dialect integration scenarios.
-
-
-## License
-
-MIT
-uite includes SQLite coverage along with PostgreSQL/MySQL integration tests for rename-state behavior.
-- Run Docker Desktop, or another compatible Docker engine, before executing the backend integration suite so the services in `docker-compose.test-db.yml` can boot successfully.
-- The package is backed by a rigorous, production-focused test suite (170+ tests) covering unit behavior, edge cases, and multi-dialect integration scenarios.
+- The package is backed by a rigorous, production-focused test suite (200+ tests) covering unit behavior, edge cases, and multi-dialect integration scenarios.
 
 
 ## License

@@ -69,6 +69,15 @@ This prepares:
 
 ## 3) Job Definition API
 
+`functionals.cron` supports two compatible registration styles:
+- module-level convenience (`import functionals.cron as cron`)
+- explicit class instance (`cron = CronRegistry()`)
+
+Use module-level when you want simple app wiring.
+Use an explicit registry instance when you need isolated registries (tests, embedded runtimes, or multi-scope job loading).
+
+### 3.1 Module-Level Registration (Default)
+
 ```python
 from __future__ import annotations
 
@@ -106,11 +115,39 @@ async def build_on_change() -> str:
     target="github_actions",
     deployment_file="ops/workflows/ci/deploy-webhook.yml",
     tags=("deploy", "webhook"),
+    retry_policy="exponential",
+    retry_max_attempts=5,
+    retry_backoff_seconds=5,
+    retry_max_backoff_seconds=120,
+    retry_jitter_seconds=2,
 )
 def deploy_webhook(event: dict) -> str:
     payload = event.get("payload", {})
     env_name = payload.get("env", "staging")
     return f"deploy requested for {env_name}"
+```
+
+### 3.2 Registry Instance Registration
+
+```python
+from __future__ import annotations
+
+from functionals.cron import CronRegistry
+
+cron = CronRegistry()
+
+
+@cron.job(
+    name="nightly-maintenance",
+    trigger=cron.cron("0 2 * * *"),
+    target="local_async",
+    tags=("ops",),
+    retry_policy="fixed",
+    retry_max_attempts=3,
+    retry_backoff_seconds=10,
+)
+def nightly_maintenance() -> str:
+    return "ok"
 ```
 
 ### Handler Signature Notes
@@ -120,6 +157,70 @@ Jobs can be sync or async.
 If present, runtime injects:
 - `event`: a dict with `id`, `source`, and `payload`
 - `payload`: payload dict (for convenience)
+
+### Retry / Backoff / Dead-Letter (Both Architectures)
+
+`@cron.job(...)` supports first-class retry controls:
+
+- `retry_policy`: `none`, `fixed`, or `exponential`
+- `retry_max_attempts`: max execution attempts including the first run
+- `retry_backoff_seconds`: base delay before retry
+- `retry_max_backoff_seconds`: cap for exponential backoff
+- `retry_jitter_seconds`: random jitter added to delay
+
+Module-level example:
+
+```python
+import functionals.cron as cron
+
+@cron.job(
+    name="deploy-production",
+    trigger=cron.event("manual"),
+    retry_policy="exponential",
+    retry_max_attempts=5,
+    retry_backoff_seconds=10,
+    retry_max_backoff_seconds=180,
+    retry_jitter_seconds=2,
+)
+def deploy_production(payload: dict | None = None) -> str:
+    return "ok"
+```
+
+Instance-level example:
+
+```python
+from functionals.cron import CronRegistry
+
+cron = CronRegistry()
+
+@cron.job(
+    name="deploy-production",
+    trigger=cron.event("manual"),
+    retry_policy="fixed",
+    retry_max_attempts=3,
+    retry_backoff_seconds=15,
+)
+def deploy_production(payload: dict | None = None) -> str:
+    return "ok"
+```
+
+When retries are exhausted, the event is marked `dead_letter`.
+Retry metadata is stored internally under the `__fx_retry` payload key.
+
+### Runtime With Explicit Registry
+
+```python
+from functionals.cron import CronRegistry
+from functionals.cron.runtime import sync_project_jobs, run_daemon
+
+cron = CronRegistry()
+
+# sync discovered jobs into state using this specific registry
+sync_project_jobs(".", registry=cron)
+
+# run daemon with this specific registry
+# await run_daemon(root=".", registry=cron)
+```
 
 ## 4) Trigger Types
 
@@ -239,7 +340,9 @@ fx cron stop .
 ## 7) Monitoring and Operations Guidance
 
 - Use `fx cron status` for live runtime summary (PID, workers, queue/run stats).
+- `fx cron status` now includes `Failed events` and `Dead-letter events` counters.
 - Use `fx cron workflows` to audit linked workflow files and execution mode.
+- Use `fx cron jobs` to inspect retry configuration resolved for each registered job.
 - Use `fx history` for command operation history.
 - Keep deployment files under `ops/workflows/` for auditability and source control.
 - For sensitive webhook jobs:
@@ -263,3 +366,4 @@ fx cron stop .
 - Registered workflows currently support one execution mode at a time:
   - linked job enqueue (`--job`)
   - direct command execution (`--command`)
+- Retry metadata is internal and stored under `__fx_retry` in event payload records.

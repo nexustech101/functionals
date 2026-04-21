@@ -5,11 +5,37 @@ Public module-level decorators for ``functionals.cli``.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from functionals.cli.registry import CommandRegistry, MISSING
 
 _default_registry = CommandRegistry()
+_active_registry: ContextVar[CommandRegistry | None] = ContextVar(
+    "functionals.cli.active_registry",
+    default=None,
+)
+
+
+def _resolve_registry() -> CommandRegistry:
+    registry = _active_registry.get()
+    return _default_registry if registry is None else registry
+
+
+@contextmanager
+def use_registry(registry: CommandRegistry):
+    """
+    Temporarily route module-level decorators to ``registry``.
+
+    This enables plugin/discovery imports to register commands into an explicit
+    instance while preserving default module-level behavior outside the context.
+    """
+    token = _active_registry.set(registry)
+    try:
+        yield registry
+    finally:
+        _active_registry.reset(token)
 
 
 def argument(
@@ -22,7 +48,7 @@ def argument(
     """Declare an argument spec for a command function."""
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-        _default_registry.stage_argument(
+        _resolve_registry().stage_argument(
             fn,
             name,
             arg_type=type,
@@ -42,7 +68,7 @@ def option(
     """Declare a command alias token, for example ``--add`` or ``-a``."""
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-        _default_registry.stage_option(fn, flag, help_text=help)
+        _resolve_registry().stage_option(fn, flag, help_text=help)
         return fn
 
     return decorator
@@ -57,7 +83,7 @@ def register(
     """Finalize a staged command and register it in the default registry."""
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-        _default_registry.finalize_command(
+        _resolve_registry().finalize_command(
             fn,
             name=name,
             description=description,
@@ -133,9 +159,9 @@ def list_commands() -> None:
 
 
 def get_registry() -> CommandRegistry:
-    """Return the module-level default registry instance."""
+    """Return the active registry in context, else the module default."""
 
-    return _default_registry
+    return _resolve_registry()
 
 
 def reset_registry() -> None:

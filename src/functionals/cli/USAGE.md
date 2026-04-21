@@ -1,7 +1,11 @@
 # Building CLI Tools With `functionals.cli`
 
-`functionals.cli` is now module-first: you define commands with module-level
-decorators (`register`, `argument`, `option`) and execute them with `run()`.
+`functionals.cli` supports two compatible registry architectures:
+
+- Module-level default facade (`import functionals.cli as cli`)
+- Explicit class-instance registries (`registry = cli.CommandRegistry()`)
+
+Both styles share the same parser/runtime behavior.
 
 ## Quick Start
 
@@ -20,6 +24,32 @@ def greet(name: str) -> str:
 if __name__ == "__main__":
     cli.run()
 ```
+
+## Explicit Instance Registry (Isolated Mode)
+
+Use a dedicated `CommandRegistry` when you want isolated command scopes (for
+embedding, tests, plugins, or multi-app processes):
+
+```python
+import functionals.cli as cli
+
+
+registry = cli.CommandRegistry()
+
+
+@registry.register(description="Greet someone")
+@registry.argument("name", type=str, help="Person to greet")
+@registry.option("--greet")
+def greet(name: str) -> str:
+    return f"Hello, {name}!"
+
+
+if __name__ == "__main__":
+    registry.run()
+```
+
+You can use the same decorator style (`@...register/@...argument/@...option`)
+on either the module-level facade or on registry instances.
 
 ## Example 2
 
@@ -300,6 +330,14 @@ Arguments
 - `cli.list_commands()` prints registered commands and aliases.
 - `cli.reset_registry()` clears registry state (useful in tests).
 - Built-in help command is always available: `help`, `--help`, and `-h`.
+
+Instance-mode equivalents:
+
+- `registry.run(...)` / `registry.run_shell(...)`
+- `registry.list_commands()` / `registry.reset_registry()`
+- `registry.load_plugins(package_path)` for explicit-registry plugin discovery
+- `registry.dispatch(command, cli_args, container=..., middleware=...)` for
+  explicit DI dispatch paths
 
 ## Interactive Mode
 
