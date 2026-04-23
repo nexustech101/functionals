@@ -804,8 +804,8 @@ class CommandRegistry:
             type_name = self._render_argument_type(arg.type)
             qualifier = "required" if arg.required else "optional"
             default_suffix = f", default={arg.default!r}" if arg.default is not MISSING else ""
-            signature = f"{arg.name} ({type_name}, {qualifier}{default_suffix})"
-            details = f"{arg.help_text or 'No description provided.'} | accepted: {self._render_argument_forms(arg)}"
+            signature = f"{arg.name}  ({type_name}, {qualifier}{default_suffix})"
+            details = arg.help_text or "-"
             argument_rows.append((signature, details))
 
         lines += [
@@ -814,17 +814,6 @@ class CommandRegistry:
             self._render_help_table(argument_rows, use_color=use_color),
         ]
         return "\n".join(lines)
-
-    @staticmethod
-    def _render_argument_forms(arg: ArgumentEntry) -> str:
-        dashed = arg.name.replace("_", "-")
-        tokens = [f"--{arg.name}", f"--{dashed}"] if dashed != arg.name else [f"--{arg.name}"]
-
-        if is_bool_flag(arg.type):
-            return "flag: " + " or ".join(tokens)
-
-        named = " or ".join(f"{token} VALUE" for token in tokens)
-        return f"<{arg.name}> or {named}"
 
     def _render_builtin_help_detail(
         self,

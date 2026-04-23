@@ -180,9 +180,11 @@ def test_builtin_help_supports_command_specific_view(capsys):
     assert "Aliases" in out
     assert "--add, -a" in out
     assert "Arguments" in out
-    assert "title (str, required)" in out
-    assert "description (str, optional" in out
-    assert "accepted: <title> or --title VALUE" in out
+    assert "title" in out
+    assert "(str, required)" in out
+    assert "description" in out
+    assert "(str, optional" in out
+    assert "Accepted:" not in out
 
 
 def test_help_for_help_builtin_does_not_suggest_help(capsys):
