@@ -9,7 +9,6 @@ import logging
 import os
 from pathlib import Path
 import subprocess
-import sys
 
 from registers.core.logging import log_exception
 from registers.cron.exceptions import CronAdapterError
@@ -52,7 +51,14 @@ def _resolve_deployment_path(root: Path, job: CronJobRecord) -> Path:
     return default_dir / f"{job.name}{_default_extension(job.target)}"
 
 
-def _render_linux(job: CronJobRecord, root: Path) -> str:
+def _execution_command(job: CronJobRecord, root: Path, execution_command: str = "") -> str:
+    template = (execution_command or "fx cron trigger {job} {root}").strip()
+    if "{job}" in template or "{root}" in template:
+        return template.format(job=job.name, root=root)
+    return f"{template} {job.name} {root}"
+
+
+def _render_linux(job: CronJobRecord, root: Path, *, execution_command: str = "") -> str:
     """Render a cron job as a Linux cron entry."""
     trigger = parse_json(job.trigger_config, {})
     expression = trigger.get("expression", "")
@@ -62,32 +68,34 @@ def _render_linux(job: CronJobRecord, root: Path) -> str:
         expression = f"*/{minutes} * * * *"
     if not expression:
         expression = "*/5 * * * *"
-    command = f"cd {root} && fx cron trigger {job.name} {root}"
+    command = f"cd {root} && {_execution_command(job, root, execution_command)}"
     return f"{expression} {command}\n"
 
 
-def _render_windows(job: CronJobRecord, root: Path) -> str:
+def _render_windows(job: CronJobRecord, root: Path, *, execution_command: str = "") -> str:
     """Render a cron job as a Windows Task Scheduler entry."""
     trigger = parse_json(job.trigger_config, {})
     expression = trigger.get("expression", "*/5 * * * *")
+    command = _execution_command(job, root, execution_command)
     return "\n".join(
         [
             "<Task>",
             f"  <Name>registers-{job.name}</Name>",
             f"  <Trigger>{expression}</Trigger>",
             "  <Action>",
-            f"    <Command>{sys.executable}</Command>",
-            f"    <Arguments>-m registers.fx.commands cron trigger {job.name} {root}</Arguments>",
+            "    <Command>cmd.exe</Command>",
+            f"    <Arguments>/C {command}</Arguments>",
             "  </Action>",
             "</Task>",
         ]
     ) + "\n"
 
 
-def _render_github_actions(job: CronJobRecord, root: Path) -> str:
+def _render_github_actions(job: CronJobRecord, root: Path, *, execution_command: str = "") -> str:
     """Render a cron job as a GitHub Actions workflow file."""
     trigger = parse_json(job.trigger_config, {})
     expression = trigger.get("expression", "*/15 * * * *")
+    command = _execution_command(job, root, execution_command)
     return "\n".join(
         [
             f"name: {job.name}",
@@ -101,12 +109,12 @@ def _render_github_actions(job: CronJobRecord, root: Path) -> str:
             "    steps:",
             "      - uses: actions/checkout@v4",
             "      - name: Trigger Functionals cron job",
-            f"        run: fx cron trigger {job.name} {root}",
+            f"        run: {command}",
         ]
     ) + "\n"
 
 
-def _render_local(job: CronJobRecord) -> str:
+def _render_local(job: CronJobRecord, root: Path, *, execution_command: str = "") -> str:
     """Render a cron job as a local configuration file."""
     return "\n".join(
         [
@@ -121,22 +129,50 @@ def _render_local(job: CronJobRecord) -> str:
             f"retry_backoff_seconds = {job.retry_backoff_seconds}",
             f"retry_max_backoff_seconds = {job.retry_max_backoff_seconds}",
             f"retry_jitter_seconds = {job.retry_jitter_seconds}",
+            f"execution_command = \"{_execution_command(job, root, execution_command)}\"",
         ]
     ) + "\n"
 
 
-def _render_content(job: CronJobRecord, root: Path) -> str:
+def _render_content(job: CronJobRecord, root: Path, *, execution_command: str = "") -> str:
     """Render the content of a deployment artifact for a given cron job based on its target type."""
     if job.target == "linux_cron":
-        return _render_linux(job, root)
+        return _render_linux(job, root, execution_command=execution_command)
     if job.target == "windows_task_scheduler":
-        return _render_windows(job, root)
+        return _render_windows(job, root, execution_command=execution_command)
     if job.target == "github_actions":
-        return _render_github_actions(job, root)
-    return _render_local(job)
+        return _render_github_actions(job, root, execution_command=execution_command)
+    return _render_local(job, root, execution_command=execution_command)
 
 
-def generate_artifacts(*, root: str | Path = ".", target: str = "") -> AdapterReport:
+def _filter_jobs(
+    rows: list[CronJobRecord],
+    *,
+    target: str = "",
+    job_name: str = "",
+) -> tuple[list[CronJobRecord], list[str]]:
+    selected: list[CronJobRecord] = []
+    skipped: list[str] = []
+    target_value = target.strip()
+    job_value = job_name.strip()
+    for job in rows:
+        if job_value and job.name != job_value:
+            skipped.append(f"{job.name} (job mismatch)")
+            continue
+        if target_value and job.target != target_value:
+            skipped.append(f"{job.name} (target mismatch)")
+            continue
+        selected.append(job)
+    return selected, skipped
+
+
+def generate_artifacts(
+    *,
+    root: str | Path = ".",
+    target: str = "",
+    job_name: str = "",
+    execution_command: str = "",
+) -> AdapterReport:
     """Generate deployment artifacts for cron jobs."""
     root_path = resolve_root(root)
     rows = cron_job_registry(root_path).filter(project_root=str(root_path), order_by="name")
@@ -144,15 +180,12 @@ def generate_artifacts(*, root: str | Path = ".", target: str = "") -> AdapterRe
     # Track which artifacts were accessed or modified for reporting purposes
     created: list[str] = []
     updated: list[str] = []
-    skipped: list[str] = []
+    rows, skipped = _filter_jobs(rows, target=target, job_name=job_name)
 
     for job in rows:
-        if target.strip() and job.target != target.strip():
-            skipped.append(f"{job.name} (target mismatch)")
-            continue
         path = _resolve_deployment_path(root_path, job)
         path.parent.mkdir(parents=True, exist_ok=True)
-        content = _render_content(job, root_path)
+        content = _render_content(job, root_path, execution_command=execution_command)
         if path.exists():
             old = path.read_text(encoding="utf-8")
             if old == content:
@@ -184,20 +217,30 @@ def _run(argv: list[str], *, cwd: Path) -> None:
         )
 
 
-def apply_artifacts(*, root: str | Path = ".", target: str = "") -> AdapterReport:
+def apply_artifacts(
+    *,
+    root: str | Path = ".",
+    target: str = "",
+    job_name: str = "",
+    execution_command: str = "",
+) -> AdapterReport:
     """Apply deployment artifacts for cron jobs."""
     root_path = resolve_root(root)
     rows = cron_job_registry(root_path).filter(project_root=str(root_path), order_by="name")
     applied: list[str] = []
+    rows, _filtered_skipped = _filter_jobs(rows, target=target, job_name=job_name)
     skipped: list[str] = []
     errors: list[str] = []
 
-    generated = generate_artifacts(root=root_path, target=target)
+    generated = generate_artifacts(
+        root=root_path,
+        target=target,
+        job_name=job_name,
+        execution_command=execution_command,
+    )
     skipped.extend(generated.skipped)
 
     for job in rows:
-        if target.strip() and job.target != target.strip():
-            continue
         if job.target not in SUPPORTED_APPLY_TARGETS:
             skipped.append(f"{job.name} ({job.target}: generate-only)")
             continue

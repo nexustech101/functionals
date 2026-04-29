@@ -107,6 +107,25 @@ def test_generate_artifacts_target_filter_reports_mismatch(tmp_path: Path) -> No
     assert any("target mismatch" in item for item in report.skipped)
 
 
+def test_generate_artifacts_can_render_script_execution_command(tmp_path: Path) -> None:
+    artifact_path = tmp_path / "ops" / "workflows" / "cron" / "nightly.cron"
+    _upsert_job(
+        tmp_path,
+        name="nightly",
+        target="linux_cron",
+        deployment_file=str(artifact_path),
+    )
+
+    generate_artifacts(
+        root=tmp_path,
+        job_name="nightly",
+        execution_command="python app.py cron run {job} {root}",
+    )
+
+    content = artifact_path.read_text(encoding="utf-8")
+    assert f"python app.py cron run nightly {tmp_path.resolve()}" in content
+
+
 def test_apply_artifacts_reports_applied_and_generate_only_skips(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

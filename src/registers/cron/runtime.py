@@ -5,22 +5,34 @@ Async runtime for executing registered cron jobs.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
+import fnmatch
 import inspect
 import json
 import logging
+import os
 from pathlib import Path
 import random
 import signal
 import time
 from typing import Any
 
+try:  # pragma: no cover - exercised when watchdog is installed.
+    from watchdog.events import FileSystemEvent, FileSystemEventHandler
+    from watchdog.observers import Observer
+    from watchdog.observers.polling import PollingObserver
+except Exception:  # pragma: no cover - dependency errors are surfaced at runtime.
+    FileSystemEvent = Any  # type: ignore[misc, assignment]
+    FileSystemEventHandler = object  # type: ignore[assignment]
+    Observer = None  # type: ignore[assignment]
+    PollingObserver = None  # type: ignore[assignment]
+
 from registers.core.logging import log_exception
 from registers.cron.decorators import get_registry
 from registers.cron.discovery import load_project_jobs
 from registers.cron.exceptions import CronRuntimeError
-from registers.cron.registry import CronRegistry
+from registers.cron.registry import CronRegistry, JobEntry, VALID_TARGETS
 from registers.cron.state import (
     CronEventRecord,
     create_event,
@@ -59,6 +71,133 @@ class RetryConfig:
 _RETRY_META_KEY = "__fx_retry"
 
 
+@dataclass(frozen=True)
+class CronRegistrationReport:
+    root: str
+    synced: tuple[str, ...]
+    generated: Any | None
+    applied: Any | None
+    job_name: str
+    target: str
+
+
+@dataclass(frozen=True)
+class WatchdogEventPayload:
+    path: str
+    dest_path: str
+    event_type: str
+    is_directory: bool
+
+
+class _CronWatchdogHandler(FileSystemEventHandler):  # type: ignore[misc, valid-type]
+    def __init__(self, callback: Any) -> None:
+        super().__init__()
+        self._callback = callback
+
+    def on_created(self, event: FileSystemEvent) -> None:
+        self._emit(event)
+
+    def on_modified(self, event: FileSystemEvent) -> None:
+        self._emit(event)
+
+    def on_moved(self, event: FileSystemEvent) -> None:
+        self._emit(event)
+
+    def on_deleted(self, event: FileSystemEvent) -> None:
+        self._emit(event)
+
+    def _emit(self, event: FileSystemEvent) -> None:
+        self._callback(
+            WatchdogEventPayload(
+                path=str(getattr(event, "src_path", "") or ""),
+                dest_path=str(getattr(event, "dest_path", "") or ""),
+                event_type=str(getattr(event, "event_type", "unknown") or "unknown"),
+                is_directory=bool(getattr(event, "is_directory", False)),
+            )
+        )
+
+
+class WatchdogFileEventSource:
+    def __init__(
+        self,
+        *,
+        root: Path,
+        jobs: dict[str, JobEntry],
+        callback: Any,
+        use_polling: bool = False,
+    ) -> None:
+        self.root = root
+        self.jobs = jobs
+        self.callback = callback
+        self.use_polling = use_polling
+        self._observer: Any | None = None
+        self._handler: _CronWatchdogHandler | None = None
+        self._started = False
+
+    def start(self) -> bool:
+        watches = self._watch_specs()
+        if not watches:
+            return False
+        observer_cls = PollingObserver if self.use_polling else Observer
+        if observer_cls is None:
+            raise CronRuntimeError(
+                "watchdog is required for file_change cron jobs. Install watchdog>=6,<7."
+            )
+
+        self._handler = _CronWatchdogHandler(self.callback)
+        self._observer = observer_cls()
+        for path, recursive in watches:
+            self._observer.schedule(self._handler, str(path), recursive=recursive)
+        self._observer.start()
+        self._started = True
+        return True
+
+    def stop(self) -> None:
+        if not self._started or self._observer is None:
+            return
+        self._observer.stop()
+        self._observer.join()
+        self._started = False
+
+    def _watch_specs(self) -> list[tuple[Path, bool]]:
+        specs: dict[Path, bool] = {}
+        for entry in self.jobs.values():
+            if not entry.enabled or entry.trigger.kind != "file_change":
+                continue
+            config = entry.trigger.config
+            paths = config.get("paths", [])
+            if not isinstance(paths, list):
+                continue
+            recursive = bool(config.get("recursive", True))
+            for raw in paths:
+                watch_path = self._watch_path_for_pattern(str(raw))
+                specs[watch_path] = specs.get(watch_path, False) or recursive
+        return sorted(specs.items(), key=lambda item: str(item[0]))
+
+    def _watch_path_for_pattern(self, raw: str) -> Path:
+        pattern = raw.strip()
+        if not pattern:
+            return self.root
+        path = Path(pattern)
+        if not path.is_absolute():
+            path = self.root / path
+        parts = path.parts
+        wildcard_index = next(
+            (
+                index
+                for index, part in enumerate(parts)
+                if any(char in part for char in "*?[")
+            ),
+            None,
+        )
+        if wildcard_index is not None:
+            base = Path(*parts[:wildcard_index]) if wildcard_index > 0 else self.root
+            return base if base.exists() else self.root
+        if path.exists() and path.is_dir():
+            return path
+        return path.parent if path.parent.exists() else self.root
+
+
 def sync_project_jobs(
     root: str | Path = ".",
     *,
@@ -74,6 +213,123 @@ def sync_project_jobs(
     entries = list(active_registry.all().values())
     sync_registry_to_state(root_path, entries)
     return package, loaded_modules, len(entries)
+
+
+def _entries_for_registration(
+    registry: CronRegistry,
+    *,
+    job_name: str | None,
+    target: str | None,
+) -> list[JobEntry]:
+    entries = registry.all()
+    if job_name:
+        selected = [registry.get(job_name)]
+    else:
+        selected = list(entries.values())
+    if target is None:
+        return selected
+
+    normalized_target = target.strip().lower()
+    if normalized_target in {"", "default"}:
+        return selected
+    if normalized_target in {"auto", "platform", "persistent"}:
+        normalized_target = "windows_task_scheduler" if os.name == "nt" else "linux_cron"
+    if normalized_target not in VALID_TARGETS:
+        raise CronRuntimeError(
+            "target must be one of: " + ", ".join(sorted(VALID_TARGETS)),
+            target=normalized_target,
+        )
+    return [replace(entry, target=normalized_target) for entry in selected]
+
+
+def register_jobs(
+    *,
+    job_name: str | None = None,
+    root: str | Path = ".",
+    target: str | None = None,
+    apply: bool = True,
+    execution_command: str = "",
+    registry: CronRegistry | None = None,
+) -> CronRegistrationReport:
+    from registers.cron.adapters import apply_artifacts, generate_artifacts
+
+    root_path = resolve_root(root)
+    active_registry = get_registry() if registry is None else registry
+    if len(active_registry) == 0:
+        sync_project_jobs(root_path, registry=active_registry)
+
+    entries = _entries_for_registration(
+        active_registry,
+        job_name=job_name,
+        target=target,
+    )
+    synced = sync_registry_to_state(root_path, entries)
+    selected_name = (job_name or "").strip()
+    selected_target = (target or "").strip()
+    adapter_target = selected_target
+    if adapter_target.lower() in {"auto", "platform", "persistent"}:
+        adapter_target = "windows_task_scheduler" if os.name == "nt" else "linux_cron"
+
+    generated = generate_artifacts(
+        root=root_path,
+        target=adapter_target,
+        job_name=selected_name,
+        execution_command=execution_command,
+    )
+    applied = (
+        apply_artifacts(
+            root=root_path,
+            target=adapter_target,
+            job_name=selected_name,
+            execution_command=execution_command,
+        )
+        if apply
+        else None
+    )
+    return CronRegistrationReport(
+        root=str(root_path),
+        synced=tuple(synced),
+        generated=generated,
+        applied=applied,
+        job_name=selected_name,
+        target=adapter_target,
+    )
+
+
+async def _run_once_async(
+    job_name: str,
+    *,
+    payload: dict[str, Any] | None = None,
+    root: str | Path = ".",
+    registry: CronRegistry | None = None,
+) -> Any:
+    root_path = resolve_root(root)
+    active_registry = get_registry() if registry is None else registry
+    engine = CronRuntimeEngine(root=root_path, registry=active_registry)
+    event = create_event(
+        root=root_path,
+        job_name=job_name,
+        source="manual",
+        payload=payload or {},
+        status="queued",
+    )
+    return await engine._execute_event(event)
+
+
+def run_once(
+    job_name: str,
+    *,
+    payload: dict[str, Any] | None = None,
+    root: str | Path = ".",
+    registry: CronRegistry | None = None,
+) -> Any:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(
+            _run_once_async(job_name, payload=payload, root=root, registry=registry)
+        )
+    raise CronRuntimeError("cron.run() cannot be called from an active event loop.")
 
 
 def _cron_piece_matches(field: str, value: int) -> bool:
@@ -133,9 +389,9 @@ class CronRuntimeEngine:
         self._running_jobs: set[str] = set()
         self._interval_next: dict[str, float] = {}
         self._cron_last_key: dict[str, str] = {}
-        self._file_last_mtime: dict[str, float] = {}
         self._file_last_emit: dict[str, float] = {}
         self._server: asyncio.AbstractServer | None = None
+        self._file_events: WatchdogFileEventSource | None = None
 
     def _jobs(self) -> dict[str, Any]:
         return self._registry.all()
@@ -239,13 +495,13 @@ class CronRuntimeEngine:
 
         loop = asyncio.get_running_loop()
         self._attach_signal_handlers(loop)
+        self._file_events = self._start_file_events(loop, jobs)
 
         worker_tasks = [asyncio.create_task(self._worker_loop()) for _ in range(self.workers)]
         tasks = [
             asyncio.create_task(self._heartbeat_loop()),
             asyncio.create_task(self._schedule_loop()),
             asyncio.create_task(self._manual_event_loop()),
-            asyncio.create_task(self._file_change_loop()),
         ]
 
         webhook_enabled = any(
@@ -270,6 +526,8 @@ class CronRuntimeEngine:
             if self._server is not None:
                 self._server.close()
                 await self._server.wait_closed()
+            if self._file_events is not None:
+                self._file_events.stop()
             mark_runtime_stopped(self.root)
 
         return RuntimeSummary(
@@ -345,57 +603,138 @@ class CronRuntimeEngine:
                 await self._queue.put(queued)
             await asyncio.sleep(self.poll_interval)
 
-    async def _file_change_loop(self) -> None:
-        while not self._stop.is_set():
-            jobs = self._jobs()
-            now_ts = time.time()
-            for name, entry in jobs.items():
-                if not entry.enabled or entry.trigger.kind != "file_change":
-                    continue
-                trigger = entry.trigger.config
-                paths = trigger.get("paths", [])
-                if not isinstance(paths, list):
-                    continue
-                debounce = float(trigger.get("debounce_seconds", 2.0))
-                latest = self._latest_mtime(paths)
-                if latest <= 0:
-                    continue
-                prev = self._file_last_mtime.get(name, 0.0)
-                if latest > prev:
-                    last_emit = self._file_last_emit.get(name, 0.0)
-                    if now_ts - last_emit >= debounce:
-                        self._file_last_mtime[name] = latest
-                        self._file_last_emit[name] = now_ts
-                        await self._enqueue_job(
-                            name,
-                            source="file_change",
-                            payload={"paths": paths, "mtime": latest},
-                        )
-            await asyncio.sleep(self.poll_interval)
+    def _start_file_events(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        jobs: dict[str, JobEntry],
+    ) -> WatchdogFileEventSource | None:
+        source = WatchdogFileEventSource(
+            root=self.root,
+            jobs=jobs,
+            callback=lambda event: self._queue_file_event(loop, event),
+        )
+        return source if source.start() else None
 
-    def _latest_mtime(self, patterns: list[str]) -> float:
-        latest = 0.0
+    def _queue_file_event(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        event: WatchdogEventPayload,
+    ) -> None:
+        if self._stop.is_set() or loop.is_closed():
+            return
+
+        def _create_task() -> None:
+            if not self._stop.is_set():
+                asyncio.create_task(self._handle_file_event(event))
+
+        loop.call_soon_threadsafe(_create_task)
+
+    async def _handle_file_event(self, event: WatchdogEventPayload) -> None:
+        for name, entry in self._jobs().items():
+            if not entry.enabled or entry.trigger.kind != "file_change":
+                continue
+            config = entry.trigger.config
+            if bool(config.get("ignore_directories", False)) and event.is_directory:
+                continue
+            paths = config.get("paths", [])
+            if not isinstance(paths, list):
+                continue
+            ignore_patterns = config.get("ignore_patterns", [])
+            if not isinstance(ignore_patterns, list):
+                ignore_patterns = []
+            if self._matches_any_file_pattern(event, ignore_patterns):
+                continue
+            if not self._matches_any_file_pattern(event, paths):
+                continue
+
+            debounce = max(0.0, float(config.get("debounce_seconds", 2.0) or 0.0))
+            debounce_key = f"{name}:{event.event_type}:{event.path}:{event.dest_path}"
+            now = time.monotonic()
+            last_emit = self._file_last_emit.get(debounce_key, 0.0)
+            if debounce > 0 and now - last_emit < debounce:
+                continue
+            self._file_last_emit[debounce_key] = now
+            await self._enqueue_job(
+                name,
+                source="file_change",
+                payload={
+                    "path": event.path,
+                    "dest_path": event.dest_path,
+                    "event_type": event.event_type,
+                    "is_directory": event.is_directory,
+                    "patterns": paths,
+                    "matched_job": name,
+                },
+            )
+
+    def _matches_any_file_pattern(
+        self,
+        event: WatchdogEventPayload,
+        patterns: list[Any],
+    ) -> bool:
         for raw in patterns:
             pattern = str(raw).strip()
             if not pattern:
                 continue
-            path = Path(pattern)
-            if not path.is_absolute():
-                path = self.root / pattern
+            if self._path_matches_pattern(event.path, pattern):
+                return True
+            if event.dest_path and self._path_matches_pattern(event.dest_path, pattern):
+                return True
+        return False
 
-            if any(ch in pattern for ch in ["*", "?", "[", "]"]):
-                for match in self.root.glob(pattern):
-                    try:
-                        latest = max(latest, match.stat().st_mtime)
-                    except OSError:
-                        continue
-                continue
+    def _path_matches_pattern(self, raw_path: str, raw_pattern: str) -> bool:
+        if not raw_path:
+            return False
+        path = Path(raw_path)
+        pattern_path = Path(raw_pattern)
+        absolute_pattern = pattern_path if pattern_path.is_absolute() else self.root / pattern_path
+        candidates = {str(path), path.as_posix()}
+        try:
+            relative = path.resolve().relative_to(self.root)
+            candidates.add(str(relative))
+            candidates.add(relative.as_posix())
+        except ValueError:
+            pass
 
-            try:
-                latest = max(latest, path.stat().st_mtime)
-            except OSError:
-                continue
-        return latest
+        pattern_candidates = {
+            raw_pattern,
+            raw_pattern.replace("\\", "/"),
+            str(absolute_pattern),
+            absolute_pattern.as_posix(),
+        }
+        pattern_candidates.update(
+            pattern.replace("**/", "") for pattern in tuple(pattern_candidates)
+        )
+        has_glob = any(char in raw_pattern for char in "*?[")
+        if has_glob:
+            return any(
+                fnmatch.fnmatch(candidate, pattern)
+                for candidate in candidates
+                for pattern in pattern_candidates
+            )
+
+        try:
+            resolved_path = path.resolve()
+            resolved_pattern = absolute_pattern.resolve()
+        except OSError:
+            resolved_path = path
+            resolved_pattern = absolute_pattern
+        if resolved_path == resolved_pattern:
+            return True
+        pattern_text = raw_pattern.replace("\\", "/")
+        if pattern_text.endswith("/") or pattern_text.endswith("/**"):
+            return self._is_relative_to(resolved_path, resolved_pattern)
+        if resolved_pattern.exists() and resolved_pattern.is_dir():
+            return self._is_relative_to(resolved_path, resolved_pattern)
+        return False
+
+    @staticmethod
+    def _is_relative_to(path: Path, parent: Path) -> bool:
+        try:
+            path.relative_to(parent)
+            return True
+        except ValueError:
+            return False
 
     async def _handle_webhook_client(
         self,
@@ -491,15 +830,15 @@ class CronRuntimeEngine:
             finally:
                 self._queue.task_done()
 
-    async def _execute_event(self, event: CronEventRecord) -> None:
+    async def _execute_event(self, event: CronEventRecord) -> Any:
         jobs = self._jobs()
         entry = jobs.get(event.job_name)
         if entry is None:
             mark_event(event, status="failed", error=f"Unknown job '{event.job_name}'.")
-            return
+            return None
         if not entry.enabled:
             mark_event(event, status="skipped")
-            return
+            return None
         if entry.name in self._running_jobs and entry.overlap_policy == "skip":
             started = utc_now()
             finished = utc_now()
@@ -514,7 +853,7 @@ class CronRuntimeEngine:
                 finished_at=finished,
                 duration_ms=0,
             )
-            return
+            return None
 
         self._running_jobs.add(entry.name)
         started_at = utc_now()
@@ -558,6 +897,7 @@ class CronRuntimeEngine:
                 finished_at=utc_now(),
                 duration_ms=duration,
             )
+            return result
         except TimeoutError:
             duration = int((time.perf_counter() - begin) * 1000)
             err = CronRuntimeError("Job execution timed out.", job=entry.name, event_id=event.id)
@@ -579,6 +919,7 @@ class CronRuntimeEngine:
                 duration_ms=duration,
                 error_message=str(err),
             )
+            return None
         except Exception as exc:
             duration = int((time.perf_counter() - begin) * 1000)
             err = CronRuntimeError("Job execution failed.", job=entry.name, event_id=event.id)
@@ -600,6 +941,7 @@ class CronRuntimeEngine:
                 duration_ms=duration,
                 error_message=f"{err}: {exc}",
             )
+            return None
         finally:
             self._running_jobs.discard(entry.name)
 

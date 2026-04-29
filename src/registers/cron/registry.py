@@ -4,8 +4,10 @@ Decorator-oriented cron job registry.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 import inspect
+from pathlib import Path
 from typing import Any
 
 from registers.cron.exceptions import (
@@ -56,12 +58,12 @@ class CronRegistry:
     def __init__(self) -> None:
         self._jobs: dict[str, JobEntry] = {}
 
-    def register(
+    def add_job(
         self,
         fn: Any,
         *,
-        name: str | None,
-        trigger: TriggerSpec,
+        name: str | None = None,
+        trigger: TriggerSpec | None = None,
         target: str = "local_async",
         deployment_file: str = "",
         enabled: bool = True,
@@ -76,6 +78,7 @@ class CronRegistry:
     ) -> JobEntry:
         if not callable(fn):
             raise TypeError("job() can only decorate callable functions.")
+        trigger = event("manual") if trigger is None else trigger
         if not isinstance(trigger, TriggerSpec):
             raise TypeError("job() requires a trigger created by cron.interval/cron.cron/cron.event.")
 
@@ -151,15 +154,13 @@ class CronRegistry:
         )
         self._jobs[entry.name] = entry
         return entry
-    
-    # Backwards compatible with older architecture of this framework;
-    # Developers can instantiate a Registry object and use `@cron.job(...)` decorators 
-    # or import decorators directly.
+
     def job(
         self,
+        _fn: Any = None,
         name: str | None = None,
         *,
-        trigger: TriggerSpec,
+        trigger: TriggerSpec | None = None,
         target: str = "local_async",
         deployment_file: str = "",
         enabled: bool = True,
@@ -172,10 +173,20 @@ class CronRegistry:
         retry_max_backoff_seconds: float = 0.0,
         retry_jitter_seconds: float = 0.0,
     ):
-        """Register a decorated callable as a cron job."""
+        """Register a decorated callable as a cron job.
+
+        Supports ``@cron.job``, ``@cron.job()``, ``@cron.job("name")``, and
+        ``@cron.job(name="name", trigger=...)``.
+        """
+
+        if _fn is not None and not callable(_fn):
+            if name is not None:
+                raise TypeError("job() received both a positional name and name=.")
+            name = str(_fn)
+            _fn = None
 
         def decorator(fn: Any) -> Any:
-            self.register(
+            self.add_job(
                 fn,
                 name=name,
                 trigger=trigger,
@@ -192,7 +203,133 @@ class CronRegistry:
                 retry_jitter_seconds=retry_jitter_seconds,
             )
             return fn
+
+        if callable(_fn):
+            return decorator(_fn)
         return decorator
+
+    def watch(
+        self,
+        paths: str | Path | list[str | Path] | tuple[str | Path, ...],
+        _fn: Any = None,
+        *,
+        name: str | None = None,
+        debounce_seconds: float = 2.0,
+        recursive: bool = True,
+        ignore_patterns: tuple[str, ...] | list[str] | None = None,
+        ignore_directories: bool = False,
+        target: str = "local_async",
+        deployment_file: str = "",
+        enabled: bool = True,
+        max_runtime: int = 0,
+        tags: tuple[str, ...] | list[str] | None = None,
+        overlap_policy: str = "skip",
+        retry_policy: str = "none",
+        retry_max_attempts: int = 0,
+        retry_backoff_seconds: float = 0.0,
+        retry_max_backoff_seconds: float = 0.0,
+        retry_jitter_seconds: float = 0.0,
+    ):
+        """Register a file-change job using watchdog-compatible metadata."""
+
+        if isinstance(paths, (str, Path)):
+            normalized_paths = [str(paths)]
+        else:
+            normalized_paths = [str(path) for path in paths]
+        trigger = event(
+            "file_change",
+            paths=normalized_paths,
+            debounce_seconds=float(debounce_seconds),
+            recursive=bool(recursive),
+            ignore_patterns=list(ignore_patterns or ()),
+            ignore_directories=bool(ignore_directories),
+        )
+
+        return self.job(
+            _fn,
+            name=name,
+            trigger=trigger,
+            target=target,
+            deployment_file=deployment_file,
+            enabled=enabled,
+            max_runtime=max_runtime,
+            tags=tags,
+            overlap_policy=overlap_policy,
+            retry_policy=retry_policy,
+            retry_max_attempts=retry_max_attempts,
+            retry_backoff_seconds=retry_backoff_seconds,
+            retry_max_backoff_seconds=retry_max_backoff_seconds,
+            retry_jitter_seconds=retry_jitter_seconds,
+        )
+
+    def register(
+        self,
+        job_name: str | Callable[..., Any] | None = None,
+        *,
+        root: str | Path = ".",
+        target: str | None = None,
+        apply: bool = True,
+        execution_command: str = "",
+        **legacy_job_kwargs: Any,
+    ):
+        """Register jobs durably, or handle the legacy callable registration path.
+
+        The public facade persists job metadata and generates/applies deployment
+        artifacts. Passing a callable keeps older ``CronRegistry.register(fn, ...)``
+        integrations working while new code should use ``add_job`` internally.
+        """
+
+        if callable(job_name):
+            return self.add_job(job_name, **legacy_job_kwargs)
+        if legacy_job_kwargs:
+            keys = ", ".join(sorted(legacy_job_kwargs))
+            raise TypeError(f"register() got unexpected keyword argument(s): {keys}")
+
+        from registers.cron.runtime import register_jobs
+
+        return register_jobs(
+            job_name=job_name,
+            root=root,
+            target=target,
+            apply=apply,
+            execution_command=execution_command,
+            registry=self,
+        )
+
+    def run(
+        self,
+        job_name: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        root: str | Path = ".",
+    ) -> Any:
+        """Run one registered job immediately and return its handler result."""
+
+        from registers.cron.runtime import run_once
+
+        return run_once(job_name, payload=payload, root=root, registry=self)
+
+    def start(
+        self,
+        *,
+        root: str | Path = ".",
+        workers: int = 4,
+        poll_interval: float = 1.0,
+        webhook_host: str = "127.0.0.1",
+        webhook_port: int = 8787,
+    ):
+        """Start the foreground async daemon for this registry."""
+
+        from registers.cron.runtime import run_daemon
+
+        return run_daemon(
+            root=root,
+            workers=workers,
+            poll_interval=poll_interval,
+            webhook_host=webhook_host,
+            webhook_port=webhook_port,
+            registry=self,
+        )
 
     def get(self, name: str) -> JobEntry:
         if name not in self._jobs:

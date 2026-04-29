@@ -46,9 +46,15 @@ Public module exports:
 
 - Decorators and trigger builders:
   - `job`
+  - `watch`
   - `interval`
   - `cron`
   - `event`
+- Facade operations:
+  - `run`
+  - `register`
+  - `start`
+  - `install_cli`
 - Registry access:
   - `get_registry`
   - `reset_registry`
@@ -129,6 +135,7 @@ Rules:
 cron.event("manual")
 cron.event("file_change", paths=["src/**/*.py"], debounce_seconds=2)
 cron.event("webhook", path="/deploy", token="change-me")
+cron.watch("src/**/*.py", debounce_seconds=2)
 ```
 
 Supported event kinds:
@@ -140,9 +147,14 @@ Validation rules:
 - `file_change` requires non-empty `paths`
 - `webhook` requires `path` starting with `/`
 
-**Summary**: choose `interval` for fixed cadence, `cron` for calendar scheduling, `event` for push/manual/file-driven automation.
+File-change triggers are powered by `watchdog`. Native OS observers are used by default, with watchdog polling available internally for environments that need it.
+
+**Summary**: choose `interval` for fixed cadence, `cron` for calendar scheduling, `event` for push/manual/file-driven automation, and `watch` for the common file-change decorator.
 
 ## 5. Job Decorator API
+
+`@cron.job(...)` supports `@cron.job`, `@cron.job()`, and `@cron.job(name=..., trigger=...)`.
+When `trigger` is omitted, the job defaults to `cron.event("manual")`.
 
 `@cron.job(...)` supports:
 
@@ -170,7 +182,12 @@ Handler injection behavior:
 - if handler has `payload` parameter, runtime passes payload dict
 - handlers may be sync or async
 
-**Summary**: the job decorator captures runtime metadata, deployment target metadata, and retry policy in one declaration.
+`cron.run("job-name", payload={...})` executes one job immediately and returns the handler result.
+`cron.register("job-name", root=".", apply=True)` syncs job metadata, generates deployment artifacts, and applies supported OS scheduler targets.
+`cron.start(...)` is the friendly foreground daemon wrapper around `run_daemon(...)`.
+`cron.install_cli()` installs a `registers.cli` command so the script that defines jobs can manage them directly.
+
+**Summary**: the job decorator captures runtime metadata, deployment target metadata, and retry policy in one declaration; facade methods run or durably register jobs.
 
 ## 6. Retry, Backoff, and Dead-Letter Behavior
 
@@ -210,6 +227,18 @@ from __future__ import annotations
 import registers.cron as cron
 
 
+@cron.job
+def rebuild(payload: dict | None = None) -> str:
+    dry_run = bool((payload or {}).get("dry_run", False))
+    return f"rebuilt (dry_run={dry_run})"
+
+
+@cron.watch("src/**/*.py", debounce_seconds=1.0)
+def rebuild_on_source_change(event: dict) -> str:
+    path = event["payload"]["path"]
+    return f"source changed: {path}"
+
+
 @cron.job(
     name="nightly-maintenance",
     trigger=cron.cron("0 2 * * *"),
@@ -235,9 +264,58 @@ def nightly_maintenance() -> str:
 def deploy_webhook(event: dict) -> str:
     env_name = event.get("payload", {}).get("env", "staging")
     return f"deploy requested for {env_name}"
+
+
+if __name__ == "__main__":
+    print(cron.run("rebuild", payload={"dry_run": True}))
+    cron.register("nightly-maintenance", root=".", apply=False)
 ```
 
 **Summary**: module-level decorators are ideal for concise single-surface cron automation.
+
+### 7.1 Script-Local CLI Management
+
+`fx` is not required to manage jobs from the script that defines them. Add a
+`cron` command to a normal `registers.cli` script:
+
+```python
+from __future__ import annotations
+
+import registers.cli as cli
+import registers.cron as cron
+
+
+@cron.job
+def rebuild(payload: dict | None = None) -> str:
+    return f"rebuilt:{bool((payload or {}).get('dry_run'))}"
+
+
+@cron.job(name="nightly", trigger=cron.cron("0 2 * * *"))
+def nightly() -> str:
+    return "nightly complete"
+
+
+cron.install_cli()
+
+
+if __name__ == "__main__":
+    cli.run(shell_title="Automation")
+```
+
+Run script-local commands:
+
+```bash
+python app.py cron jobs
+python app.py cron run rebuild . --payload '{"dry_run":true}'
+python app.py cron register nightly . --target auto --apply
+python app.py cron status .
+```
+
+`--target auto` maps to the platform scheduler: Windows Task Scheduler on
+Windows, Linux cron elsewhere. The generated persistent schedule calls back into
+the same script with `cron run <job>`, so it does not depend on `fx`.
+
+**Summary**: use `cron.install_cli()` when you want a self-contained automation script with its own job-management commands.
 
 ## 8. Class-Instance Usage (Isolated Registries)
 
@@ -259,6 +337,11 @@ cron = CronRegistry()
 )
 def cleanup_cache(payload: dict | None = None) -> str:
     return "cache cleaned"
+
+
+# Immediate execution and durable registration mirror the module facade.
+cron.run("cleanup-cache", payload={"dry_run": True})
+cron.register("cleanup-cache", root=".", apply=False)
 ```
 
 ### 8.1 Why this matters

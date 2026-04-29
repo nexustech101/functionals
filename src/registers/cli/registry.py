@@ -106,6 +106,13 @@ class CommandRegistry:
             help: str = "",
         ) -> Callable[[Callable[..., Any]], Callable[..., Any]]: ...
 
+        def alias(
+            self,
+            flag: str,
+            *,
+            help: str = "",
+        ) -> Callable[[Callable[..., Any]], Callable[..., Any]]: ...
+
         def register(
             self,
             name: str | None = None,
@@ -181,6 +188,16 @@ class CommandRegistry:
             return fn
 
         return decorator
+    
+    def _decorator_alias(
+        self,
+        flag: str,
+        *,
+        help: str = "",
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Alias decorator for ``stage_option(...)``."""
+
+        return self._decorator_option(flag, help=help)
 
     def _decorator_register(
         self,
@@ -237,6 +254,19 @@ class CommandRegistry:
 
         # Decorators execute bottom-up; prepend to preserve top-down source order.
         staged.insert(0, _StagedOption(flag=flag, help_text=help_text))
+
+    def stage_option(
+        self,
+        fn: Callable[..., Any],
+        flag: str,
+        *,
+        help_text: str = "",
+    ) -> None:
+        self.stage_option(
+            fn, 
+            flag, 
+            help_text=help_text
+        )
 
     def finalize_command(
         self,
@@ -315,7 +345,7 @@ class CommandRegistry:
         command_name: str | None = None,
         *,
         program_name: str | None = None,
-        shell_title: str = "Functionals CLI",
+        shell_title: str = "Registers CLI",
         shell_description: str = "Type 'help' for shell help and 'exit' to quit.",
         shell_version: str | None = None,
         colors: bool | None = None,
@@ -354,7 +384,7 @@ class CommandRegistry:
         shell_input_fn: Callable[[str], str] | None = None,
         shell_banner: bool = True,
         shell_banner_text: str | None = None,
-        shell_title: str = "Functionals CLI",
+        shell_title: str = "Registers CLI",
         shell_description: str = "Type 'help' for shell help and 'exit' to quit.",
         shell_version: str | None = None,
         shell_colors: bool | None = None,

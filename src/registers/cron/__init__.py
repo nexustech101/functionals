@@ -2,7 +2,17 @@
 Decorator-driven cron/scheduler tooling for Functionals.
 """
 
-from registers.cron.decorators import get_registry, job, reset_registry, use_registry
+from registers.cron.cli import install_cli
+from registers.cron.decorators import (
+    get_registry,
+    job,
+    register,
+    reset_registry,
+    run,
+    start,
+    use_registry,
+    watch,
+)
 from registers.cron.exceptions import (
     CronAdapterError,
     CronError,
@@ -31,9 +41,14 @@ from registers.cron.workspace import (
 
 __all__ = [
     "job",
+    "watch",
     "interval",
     "cron",
     "event",
+    "run",
+    "register",
+    "start",
+    "install_cli",
     "use_registry",
     "get_registry",
     "reset_registry",

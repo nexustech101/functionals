@@ -29,6 +29,7 @@ dependencies = [
   "pydantic>=2.7,<3",
   "sqlalchemy>=2.0,<3",
   "pyfiglet>=1.0,<2",
+  "watchdog>=6,<7",
 ]
 
 [project.optional-dependencies]

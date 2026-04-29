@@ -349,15 +349,26 @@ curl "http://localhost:8000/orders/desc?limit=20&offset=0"
 
 ## Cron + Workflow Operations
 
-Use `registers.cron` decorators to define interval/cron/event jobs.
-For runtime lifecycle and workflow operations (`start`, `status`, `generate`,
-`apply`, `register`, `run-workflow`), use `fx-tool`.
+Use `registers.cron` decorators to define manual, interval, cron, webhook, and
+file-change jobs. A normal `registers.cli` script can install a `cron` command
+to list, run, status-check, and persist the jobs it defines; `fx-tool` remains
+an optional operator companion for project/workflow orchestration.
 
 Both cron registration styles are supported:
 
 ```python
 # Module-level style
 import registers.cron as cron
+
+@cron.job
+def rebuild(payload: dict | None = None) -> str:
+    return f"rebuilt:{bool((payload or {}).get('dry_run'))}"
+
+
+@cron.watch("src/**/*.py", debounce_seconds=1.0)
+def rebuild_on_source_change(event: dict) -> str:
+    return f"changed:{event['payload']['path']}"
+
 
 @cron.job(
     name="nightly",
@@ -371,7 +382,39 @@ import registers.cron as cron
 )
 def nightly() -> str:
     return "ok"
+
+
+print(cron.run("rebuild", payload={"dry_run": True}))
+cron.register("nightly", root=".", apply=False)
 ```
+
+Self-contained CLI management:
+
+```python
+import registers.cli as cli
+import registers.cron as cron
+
+
+@cron.job(name="nightly", trigger=cron.cron("0 2 * * *"))
+def nightly() -> str:
+    return "ok"
+
+
+cron.install_cli()
+
+
+if __name__ == "__main__":
+    cli.run()
+```
+
+```bash
+python app.py cron jobs
+python app.py cron run nightly .
+python app.py cron register nightly . --target auto --apply
+```
+
+`--target auto` installs the appropriate platform scheduler target and the
+persistent command calls back into the same script with `cron run`.
 
 ```python
 # Explicit instance style
@@ -389,9 +432,14 @@ cron = CronRegistry()
 )
 def nightly() -> str:
     return "ok"
+
+
+cron.run("nightly", root=".")
+cron.register("nightly", root=".", apply=False)
 ```
 
 Retry-capable jobs are moved to `dead_letter` state when max attempts are exhausted.
+File-change jobs use the `watchdog` Python library under the daemon runtime.
 
 ## Architecture
 
