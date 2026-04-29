@@ -195,10 +195,10 @@ class CommandRegistry:
         *,
         help: str = "",
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        """Instance-level decorator alias for ``stage_option(...)``."""
+        """Instance-level decorator alias for ``stage_alias(...)``."""
 
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-            self.stage_option(fn, flag, help_text=help)
+            self.stage_alias(fn, flag, help_text=help)
             return fn
 
         return decorator
